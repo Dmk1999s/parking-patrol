@@ -35,7 +35,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/TF
       Name: TF
       Enabled: true
-      Show Names: true
+      Show Names: false
       Marker Scale: 3
       Value: true
   Global Options:
