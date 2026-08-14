@@ -1,7 +1,12 @@
 .env
+.env.*
 __pycache__/
 *.pyc
 *.pyo
 db.sqlite3
+*.sqlite3
 mydatabase.db
+*.log
+media/
+staticfiles/
 venv/

@@ -27,6 +27,7 @@
 """
 
 import base64
+import os
 import threading
 
 import cv2
@@ -37,8 +38,10 @@ from visualization_msgs.msg import MarkerArray
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-# 중앙 서버 주소
-SERVER = 'http://192.168.107.42:8000'
+# 중앙 서버 주소. 기본은 팀 공용 서버, 시뮬 EC2 처럼 서버가 같은 머신이면
+#   PATROL_SERVER=http://127.0.0.1:8000 python3 bridge_webcam.py
+# (sim/setup/env.sh 가 PATROL_SERVER 를 localhost 로 넣어 준다)
+SERVER = os.environ.get('PATROL_SERVER', 'http://192.168.107.42:8000')
 
 # JPEG 압축 품질 (0~100). 낮을수록 파일 크기 작아지고 화질 저하.
 # 60으로 설정하여 네트워크 부하와 화질의 균형을 맞춤.

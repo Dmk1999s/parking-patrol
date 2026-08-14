@@ -1,0 +1,55 @@
+# slam_toolbox (async) 설정 — AMR1 로 주차장 지도를 만든다.
+#
+#   patrol_ros                            # ROS 2 humble (python 3.10)
+#   ros2 run slam_toolbox async_slam_toolbox_node \
+#       --ros-args --params-file sim/slam/slam_params.yaml
+#
+# 🚨 use_sim_time 이 핵심이다. 씬이 /clock 으로 시뮬 시간을 발행하므로
+#    SLAM 도 그 시계를 따라야 한다. 빼먹으면 TF 타임스탬프(시뮬 시간)와
+#    노드 시계(벽시계)가 어긋나 "지도가 안 만들어지는데 오류도 없는" 상태가
+#    된다 — extrapolation 경고만 가끔 뜬다.
+#
+# 프레임 이름에 amr1/ 접두사가 붙는 이유는 sim/scenes/ros_bridge.py 머리말
+# 참고 (로봇이 두 대라 프레임을 접두사로 가른다).
+slam_toolbox:
+  ros__parameters:
+    use_sim_time: true
+
+    # ── 프레임·토픽 (ros_bridge.py 와 짝) ─────────────────────
+    odom_frame: amr1/odom
+    map_frame: map
+    base_frame: amr1/base_link
+    scan_topic: /amr1/scan
+    mode: mapping
+
+    # ── 지도 ──────────────────────────────────────────────────
+    resolution: 0.05              # 5 cm/셀 — 주차선(12 cm)이 2셀로 잡힌다
+    # 씬 라이다 사거리와 같게 (ros_bridge.LIDAR_RANGE).
+    # 🚨 라이다를 PATROL_LIDAR_RANGE=3.5 로 줄이면 여기도 같이 줄여야 한다.
+    max_laser_range: 20.0
+    map_update_interval: 2.0
+
+    # ── 스캔 처리 ─────────────────────────────────────────────
+    # 0.2 m / 0.2 rad 움직일 때마다 스캔 하나를 지도에 넣는다.
+    # 씬 스캔이 3600점(0.1°)으로 실물 LDS-01(1°)보다 10배 촘촘해서,
+    # 이보다 자주 넣으면 scan matcher(ceres)가 CPU 를 다 먹는다.
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
+    throttle_scans: 1
+
+    # 🚨 스캔 매칭을 끈다 — 시뮬 한정으로 이게 맞다.
+    #
+    # 켜고 돌렸더니 지도가 사방으로 겹쳐 쌓였다 (실측). RTX 라이다는 로봇이
+    # 회전하는 동안 찍은 스캔이 통째로 각도 방향으로 밀리는데("MotionBVH not
+    # enabled → incorrect point cloud with fast movement" 경고가 그것이다),
+    # 매칭기가 그 왜곡을 "로봇이 돌았다"로 해석해 자세를 틀어 버린다.
+    # 이 시뮬의 /odom 은 물리에서 바로 뽑은 사실상 참값이라, 왜곡된 스캔으로
+    # 참값을 "보정"하면 순전히 나빠지기만 한다 — odom 자세에 스캔을 그대로
+    # 얹는 것이 가장 정확하다.
+    #
+    # ⚠ **실물 TB3 로 가면 반드시 되돌릴 것** (true + do_loop_closing true).
+    #   실물 odom 은 바퀴 미끄러짐으로 드리프트해서 매칭 없이는 못 쓴다.
+    use_scan_matching: false
+    do_loop_closing: false
+    transform_publish_period: 0.05
+    transform_timeout: 0.5        # 시뮬이 실시간보다 느릴 때 TF 대기 여유

@@ -3,9 +3,11 @@ from django.db import models
 
 ZONE_CHOICES = [
     ('Not', '주차구역 아님'),
-    ('NORMAL', '정상 주차구역 (주황색)'),
-    ('DISABLED', '장애인 전용'),
-    ('FIRE', '소방차 전용'),
+    ('NORMAL', '일반 주차구역 (흰색 선)'),
+    ('COMPACT', '경차 전용 (파란 선)'),
+    ('DISABLED', '장애인 전용 (파란 선 + 휠체어 표시)'),
+    ('EV', '전기차 전용 (초록 선)'),
+    ('FIRE', '소방차 전용 (주황색)'),
 ]
 
 

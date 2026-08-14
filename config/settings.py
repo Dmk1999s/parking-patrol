@@ -50,16 +50,29 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT'),
+# DB_HOST 가 있으면 팀 공용 Supabase(PostgreSQL), 없으면 로컬 sqlite 로 뜬다.
+# 시뮬 EC2 에는 팀 .env(Supabase 접속 정보)가 없어서 서버가 아예 못 뜨는 상태
+# 였는데, 웹캠 스트림·대시보드는 DB 가 거의 필요 없다(프레임은 메모리 저장,
+# 세션 테이블 정도) — 로컬 개발용 폴백을 둔다. 팀 .env 를 받으면 그걸 넣는
+# 순간 자동으로 Supabase 로 돌아간다.
+if os.getenv('DB_HOST'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME'),
+            'USER': os.getenv('DB_USER'),
+            'PASSWORD': os.getenv('DB_PASSWORD'),
+            'HOST': os.getenv('DB_HOST'),
+            'PORT': os.getenv('DB_PORT'),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 

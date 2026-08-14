@@ -1,0 +1,60 @@
+# RViz2 설정 — SLAM 지도 + AMR1 스캔 + TF.
+# 헤드리스 EC2 에서는 Xvfb + noVNC 로 띄운다: sim/slam/rviz_web.sh
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 40
+      Value: true
+    - Class: rviz_default_plugins/Map
+      Name: Map
+      Enabled: true
+      Topic:
+        Value: /map
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: AMR1 Scan
+      Enabled: true
+      Topic:
+        Value: /amr1/scan
+      Size (m): 0.05
+      Color: 255; 60; 60
+      Color Transformer: FlatColor
+      Style: Flat Squares
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Marker Scale: 3
+      Value: true
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 15
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Scale: 28
+      Target Frame: <Fixed Frame>
+      X: 13
+      Y: 6
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1600
+  X: 0
+  Y: 0
