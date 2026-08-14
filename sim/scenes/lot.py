@@ -40,15 +40,15 @@ WHEEL_R = 0.33
 #    까지 차체를 이어 준다.
 ROCKER_Z0 = 0.10         # 사이드실 아래 끝 (지면 간격)
 
-GROUND = (-2.0, 30.0, -6.0, 17.0)      # x0, x1, y0, y1
+GROUND = layout.GROUND                 # (x0, x1, y0, y1) — 숫자는 layout.py 에
 
 # 오버헤드 웹캠. 주차장 전체(약 32×23 m)가 한 프레임에 들어와야 한다.
 # 화각 69° 에서 가로 32 m 를 담으려면 높이 = 16/tan(34.5°) ≈ 23 m.
 # 🚨 세로 조리개를 같이 정해야 한다. 기본값은 가로 20.955 / 세로 15.2955 인
 #    4:3 비율인데 렌더는 1280×720(16:9) 이라, 안 맞추면 위아래가 잘린다.
 #    세로 = 가로 × 9/16 = 11.787.
-WEBCAM = dict(pos=(14.0, 5.5, 28.0), aperture=20.955, v_aperture=11.787,
-              focal=15.2)
+# 숫자는 layout.py 에 있다 — webcam_detect.py 가 역변환에 같은 값을 쓴다.
+WEBCAM = layout.WEBCAM
 
 
 def _mat(stage, path, rgb, rough=0.6, metal=0.0):
