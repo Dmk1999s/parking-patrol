@@ -194,12 +194,13 @@
       plugin: "nav2_navfn_planner/NavfnPlanner"
       tolerance: 0.5
       use_astar: false
-      # 🚨 미탐사(unknown)는 장애물 취급 — true 로 뒀더니 차량 뒤 가림
-      #    영역(스캔 안 된 unknown)을 "통과 가능"으로 보고 도달 불가 목표를
-      #    향해 주차면 차량 사이 0.55 m 틈으로 파고들어 로봇이 끼었다 (실측).
-      #    시작 지점 주변은 유령 정리로 몇 픽셀만 unknown 이고 로봇 셀은
-      #    플래너가 비워 주므로 출발에는 지장 없다.
-      allow_unknown: false
+      # true 가 맞다 — 로봇 시작 지점이 미탐사 주머니 안이라(자기 자리는
+      #    스캔 못 한다) false 면 출발 자체가 안 된다. 차 사이 틈 파고들기의
+      #    진짜 원인은 지도 yaml 의 free_thresh 0.25 로 미탐사(205)가 "빈
+      #    공간"으로 발행되던 것 (maps/parking.yaml 주석). 미탐사가 제대로
+      #    unknown 이 된 지금은 ① amr1_nav.goal_blocked (미탐사/장애물 목표
+      #    출동 생략) ② 전역 robot_radius 0.28 (좁은 틈 봉쇄) 이 막는다.
+      allow_unknown: true
 
 /**/behavior_server:
   ros__parameters:

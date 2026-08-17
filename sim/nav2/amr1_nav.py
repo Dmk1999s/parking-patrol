@@ -64,7 +64,10 @@ from sensor_msgs.msg import Image  # noqa: E402
 from std_msgs.msg import Bool  # noqa: E402
 
 import layout  # noqa: E402  (sim/scenes — Isaac 없이 python3 로 돈다)
+import plate_ocr  # noqa: E402  (sim/vision)
 import zone_classify  # noqa: E402  (sim/vision)
+
+_REPO = os.path.normpath(os.path.join(_HERE, "..", ".."))
 
 START = layout.AMR_START[0]                       # (1.2, -3.0) — odom 원점
 AISLE_MID = (layout.AISLE_X0 + layout.AISLE_X1) / 2.0     # 12.7
@@ -176,18 +179,101 @@ class Amr1Nav(Node):
                                 f"ev{event_id}_{wx:.2f}_{wy:.2f}_{yaw:.0f}.jpg")
             cv2.imwrite(path, frame)
 
-        if event_id is not None and res["vehicle_type"] is not None:
-            try:
-                r = requests.patch(
-                    f"{SERVER}/api/parking/{event_id}/zone/",
-                    json={"zone_type": res["zone_type"],
-                          "vehicle_type": res["vehicle_type"]}, timeout=2)
-                self.get_logger().info(f"PATCH zone → {r.status_code}")
-            except Exception as e:
-                self.get_logger().warn(f"PATCH 실패: {e}")
-        elif res["vehicle_type"] is None:
-            self.get_logger().info("DISABLED — 번호판 확인(OCR 단계)까지 판정 보류")
+        zone, veh = res["zone_type"], res["vehicle_type"]
+        if event_id is not None and veh is not None:
+            self._patch_zone(event_id, zone, veh)
+
+        # ── OCR 단계 (CLAUDE.md 2단계 후반) ──────────────────────
+        # ILLEGAL → 번호판 저장(→SCANNED). DISABLED → 번호판으로 등록 여부
+        # 조회 후 최종 판정. NORMAL 은 스킵이라 OCR 이 필요 없다.
+        need_ocr = veh == "ILLEGAL" or (zone == "DISABLED" and veh is None)
+        if event_id is None or not need_ocr:
+            return res
+
+        plate, crop = self._ocr_retry()
+        if zone == "DISABLED":
+            registered = False
+            if plate:
+                try:
+                    r = requests.get(f"{SERVER}/api/disabled/{plate}/", timeout=2)
+                    registered = bool(r.json().get("is_disabled"))
+                except Exception as e:
+                    self.get_logger().warn(f"disabled 조회 실패: {e}")
+            veh = "NORMAL" if registered else "ILLEGAL"
+            self.get_logger().info(
+                f"장애인 구역 {plate or '(OCR 실패)'} — "
+                f"{'등록 차량, 정상' if registered else '미등록, 불법'}")
+            self._patch_zone(event_id, zone, veh)
+            if veh == "NORMAL":
+                return res                       # 등록 차량 — 스킵
+
+        if plate is None:
+            self.get_logger().warn("번호판 OCR 실패 — SCANNED 전환 보류 (DETECTED 유지)")
+            return res
+
+        # 크롭 저장 + vehicle_info 등록 → status=SCANNED.
+        # amr_vehicle_x/y 는 지금 로봇이 선 관측 지점 — AMR2 가 그대로
+        # Nav2 목표로 쓸 수 있는, 통로 위의 검증된 좌표다.
+        img_rel = None
+        try:
+            os.makedirs(os.path.join(_REPO, "media", "amr1_ocr"), exist_ok=True)
+            img_rel = f"media/amr1_ocr/event_{event_id}.jpg"
+            cv2.imwrite(os.path.join(_REPO, img_rel), crop)
+        except Exception as e:
+            self.get_logger().warn(f"OCR 이미지 저장 실패: {e}")
+        wx, wy, _ = self._pose
+        try:
+            r = requests.post(f"{SERVER}/api/vehicle/", timeout=2, json={
+                "event_id": event_id, "plate_number": plate,
+                "amr_vehicle_x": wx, "amr_vehicle_y": wy,
+                "ocr_image_path": img_rel})
+            self.get_logger().info(f"번호판 {plate} 등록 → {r.status_code} (SCANNED)")
+        except Exception as e:
+            self.get_logger().warn(f"vehicle 등록 실패: {e}")
         return res
+
+    def _patch_zone(self, event_id, zone, veh):
+        try:
+            r = requests.patch(
+                f"{SERVER}/api/parking/{event_id}/zone/",
+                json={"zone_type": zone, "vehicle_type": veh}, timeout=2)
+            self.get_logger().info(f"PATCH zone → {r.status_code}")
+        except Exception as e:
+            self.get_logger().warn(f"PATCH 실패: {e}")
+
+    def _ocr_retry(self, attempts=3):
+        """최신 프레임으로 OCR — 실패하면 다음 프레임을 기다려 재시도."""
+        last_t = self._frame[0] if self._frame else 0.0
+        for i in range(attempts):
+            frame = self._frame[1]
+            n_cand = len(plate_ocr._candidates(frame))
+            plate, crop = plate_ocr.ocr_frame(frame)
+            self.get_logger().info(f"OCR 시도 {i + 1}: 후보 {n_cand} → {plate}")
+            if plate:
+                return plate, crop
+            try:                             # 진단용 — 시도한 프레임을 남긴다
+                d = os.path.join(_REPO, "media", "ocr_fail")
+                os.makedirs(d, exist_ok=True)
+                cv2.imwrite(os.path.join(
+                    d, f"{time.strftime('%H%M%S')}_att{i + 1}.png"), frame)
+            except Exception:
+                pass
+            t0 = time.monotonic()
+            while (rclpy.ok() and self._frame[0] <= last_t
+                   and time.monotonic() - t0 < 10.0):
+                rclpy.spin_once(self, timeout_sec=0.3)
+            last_t = self._frame[0]
+        # 진단용 — 실패한 프레임을 남겨 오프라인에서 원인을 본다
+        try:
+            d = os.path.join(_REPO, "media", "ocr_fail")
+            os.makedirs(d, exist_ok=True)
+            wx, wy, yaw = self._pose or (0, 0, 0)
+            cv2.imwrite(os.path.join(
+                d, f"{time.strftime('%H%M%S')}_{wx:.2f}_{wy:.2f}_{yaw:.0f}.png"),
+                self._frame[1])
+        except Exception:
+            pass
+        return None, None
 
     def set_duty(self, on):
         self._duty = on

@@ -35,6 +35,12 @@
    `PATCH /api/parking/<id>/zone/`. **seed 7 에서 11/11 시나리오 정답 일치**
    (일반 스킵 2, 경차 불법 2, EV 정상 1·불법 1, 소방 불법 1, 벽쪽 Not 1,
    접근 불가 2, 장애인 보류 1 — OCR 단계에서 판정). 상세는 WORKLOG.
+9. **번호판 OCR** — `sim/vision/plate_ocr.py` (3중 로컬라이저 + tesseract
+   다수결) + `amr1_nav` 통합: ILLEGAL → OCR → `POST /api/vehicle/`
+   (plate, amr_vehicle_x/y=관측점, ocr_image_path) → **SCANNED**.
+   DISABLED 는 `/api/disabled/<판>/` 조회로 최종 판정. **seed 7 불법 6건
+   전부 정답 번호판으로 SCANNED** (33아2341·56차5070·80하1968·84파1812·
+   89사9133·84사7101). 실패 시 DETECTED 유지→재방문. 상세·함정은 WORKLOG.
 
 ## ⚠ 알려진 공백
 
@@ -100,15 +106,16 @@ PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr1_nav.py --all
 
 ## 📋 남은 것 (시나리오 순서)
 
-1. **OCR 노드 통합** — tesseract 검증 완료(README). ILLEGAL 판정 건에서
-   OcrCam 프레임 → 번호판 텍스트 → `POST /api/vehicle/` (status→SCANNED,
-   amr_vehicle_x/y 포함). DISABLED 는 여기서 `/api/disabled/<번호판>/`
-   조회로 최종 판정. 이게 붙으면 `amr1_nav.py` 무옵션 모드가 자연히
-   전 이벤트를 돈다 (SCANNED 로 바뀌면 `/next/` 가 다음 건을 준다).
-2. **AMR2 시나리오** — AMR1 복귀 후 출동, `GET /api/vehicle/next/` →
-   번호판 재확인 → `POST /api/vehicle/verify/`. (씬은 `--robots both`,
-   Nav2 는 amr2 용 파라미터 복제 — 프레임·토픽 접두사만 다르다.
-   카메라 게이트용 `/amr2/on_duty` 발행도 출동 노드가 맡는다.)
+1. **AMR2 시나리오** — AMR1 복귀 후 출동, `GET /api/vehicle/next/` →
+   Nav2 로 amr_vehicle_x/y(관측점, 통로 위) 이동 → 번호판 재확인(OCR) →
+   `POST /api/vehicle/verify/` (match→WARNING_ISSUED / 불일치→삭제).
+   씬은 `--robots both`, Nav2 는 amr2 용 파라미터 복제(프레임·토픽 접두사만
+   다름), 카메라 게이트용 `/amr2/on_duty` 발행도 출동 노드가 맡는다.
+   plate_ocr·goal_blocked 는 그대로 재사용.
+2. **NORMAL 이벤트 정리 정책** — 정상 판정(스킵) 이벤트가 DETECTED 로
+   영원히 남아 `/api/parking/next/` 가 그 이벤트만 반복 반환한다 —
+   무옵션(시나리오) 모드가 진행이 안 된다. 상태 추가(예: CLEARED)나
+   삭제 등 서버 쪽 정책이 필요 — 팀 논의.
 3. **웹캠 이탈 처리** — 점유 해제 시 확정 취소 + 브리지에 DELETE 경로 추가.
 4. **벽쪽 세로주차 정책** — 남단 1대만 단속할지, obs 좌표 정책을 바꿀지
    (위 공백란). 팀과 논의.
