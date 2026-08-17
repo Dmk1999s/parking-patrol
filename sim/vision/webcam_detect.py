@@ -184,11 +184,23 @@ class WebcamDetect(Node):
 
     def _detect(self, frame):
         floor = np.median(frame[100:620, 200:1080].reshape(-1, 3), axis=0)
-        dist = np.abs(frame.astype(np.int16) - floor.astype(np.int16)).max(axis=2)
+        f16 = frame.astype(np.int16)
+        dist = np.abs(f16 - floor.astype(np.int16)).max(axis=2)
         mask = dist > COLOR_THRESH
         # 소방 경계선(주황 → 렌더에서 노랑)은 바닥 취급 — docstring 참고
         b, g, r = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
         mask &= ~((r > 180) & (g > 120) & (g < 0.9 * r) & (b < 80))
+        # 🚨 그림자도 바닥 취급 — 실차 치수(총고 1.45)로 그림자가 길어져
+        #    빈 칸(스톨 4)이 이웃 차 그림자에 거의 덮인다 (남쪽 띠 회피로는
+        #    부족). 렌더 실측: 그림자 = 무채색(chroma ~9) + 중간 밝기(v 55
+        #    ~115), 차체·캐빈 = 유채색(chroma ~30+), 바퀴 = 매우 어두움
+        #    (v<40, 바닥 취급하면 안 되므로 하한을 둔다).
+        #    ⚠ 무채색 회색 차체(BODY_RGB 의 0.85 은색 등)는 캐빈·바퀴로만
+        #      잡히게 된다 — seed 7 에는 없지만 seed 를 바꾸면 확인할 것.
+        v = f16.mean(axis=2)
+        chroma = f16.max(axis=2) - f16.min(axis=2)
+        floor_v = float(floor.mean())
+        mask &= ~((chroma < 16) & (v > 40) & (v < floor_v * 0.82))
 
         seen = {}
         for sl in self.slots:
