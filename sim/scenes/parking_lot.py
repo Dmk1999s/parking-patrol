@@ -50,7 +50,7 @@ def parse_args():
                    help="뷰포트 기준 그리드를 켠다 (기본은 끔 — 바닥을 덮어 버린다)")
     p.add_argument("--cam", metavar="PRIM",
                    help="이 카메라로 본다. 예: /World/Webcam1 (오버헤드 웹캠), "
-                        "/World/AMR1/OcrCam (AMR1 이 보는 화면). "
+                        "/World/AMR1/base_link/OcrCam (AMR1 이 보는 화면). "
                         "기본은 공전하는 /World/ViewCam")
     p.add_argument("--amr1-stall", type=int, metavar="N",
                    help="AMR1 을 N번 주차면 앞 촬영 위치에 세운다")

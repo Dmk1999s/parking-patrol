@@ -138,7 +138,10 @@ def main():
     if not ARGS.no_ros:
         import ros_bridge
         wired = [r for r in ROBOTS if ARGS.robots in ("both", r[1])]
-        ros_bridge.wire(stage, wired, webcam=not ARGS.no_webcam)
+        # 카메라는 --robots 와 무관하게 두 로봇 다 발행한다 — 대시보드의
+        # AMR1/AMR2 카메라 패널이 둘 다 살아 있어야 해서다 (wire 머리말).
+        ros_bridge.wire(stage, wired, webcam=not ARGS.no_webcam,
+                        cam_robots=ROBOTS)
         print(f"[씬] ROS_DOMAIN_ID = {os.environ.get('ROS_DOMAIN_ID', '(미설정 — 0)')}")
 
     # ── 뷰포트 카메라 ──────────────────────────────────────────

@@ -268,7 +268,8 @@ def robot_graph(stage, robot_path, ns, lidar_rp, graph_path=None):
 def webcam_graph(stage, cam_prim="/World/Webcam1",
                  topic="webcam_images/webcam1/detections",
                  resolution=(1280, 720), skip=5,
-                 graph_path="/Graphs/ROS_Webcam1"):
+                 graph_path="/Graphs/ROS_Webcam1",
+                 frame_id="webcam1", label="webcam1"):
     """오버헤드 웹캠을 `sensor_msgs/Image` 로 발행 — 기존 시스템이 받는 쪽이다.
 
     토픽 이름은 `bridge/bridge_webcam.py` 가 구독하는 것과 **글자까지 같아야
@@ -306,21 +307,28 @@ def webcam_graph(stage, cam_prim="/World/Webcam1",
                 ("Publish.inputs:renderProductPath", rp.path),
                 ("Publish.inputs:topicName", topic),
                 ("Publish.inputs:type", "rgb"),
-                ("Publish.inputs:frameId", "webcam1"),
+                ("Publish.inputs:frameId", frame_id),
                 ("Publish.inputs:frameSkipCount", skip),
             ],
         },
     )
-    print(f"[ros] webcam1: {topic} 발행 ({resolution[0]}×{resolution[1]}, "
+    print(f"[ros] {label}: {topic} 발행 ({resolution[0]}×{resolution[1]}, "
           f"시뮬 {60 // (skip + 1)} Hz)")
     return rp.path
 
 
-def wire(stage, robots, webcam=True):
+def wire(stage, robots, webcam=True, cam_robots=None):
     """`/clock` + 로봇별 그래프를 한 번에. `robots` 는 [(프림경로, 네임스페이스)].
 
     Args:
         webcam: 오버헤드 웹캠 발행도 켠다 (`webcam_graph`).
+        cam_robots: OcrCam 을 Image 로 발행할 로봇 목록 — 토픽
+            `amr_images/<ns>/ocr`. `sim/vision/amr_cam_bridge.py` 가 받아
+            `POST /api/<ns>/frame/` 로 올리면 모니터 대시보드의
+            "AMR (Police) 카메라" 패널에 뜬다. OCR 노드도 같은 토픽을 쓴다.
+            **라이다 배선(`robots`)과 별개다** — 관리자 화면에는 두 로봇
+            카메라가 다 나와야 해서, `--robots amr1` 이어도 카메라는 전부
+            발행한다 (patrol.py 가 전체 목록을 준다). None 이면 `robots`.
 
     Returns:
         {네임스페이스: dict(lidar=..., render_product=..., graph=...)}
@@ -334,6 +342,19 @@ def wire(stage, robots, webcam=True):
         out[ns] = dict(lidar=lidar, render_product=rp, graph=graph)
         print(f"[ros] {ns}: /{ns}/cmd_vel → 차동구동, "
               f"/{ns}/scan · /{ns}/odom · /tf 발행")
+    for path, ns in (cam_robots if cam_robots is not None else robots):
+        # skip=11 → 시뮬 5 Hz. 대시보드(벽시계 4 Hz)와 OCR(정지 상태 한 장)
+        # 에는 충분하고, 해상도는 그대로라 품질 손실이 없다 — DDS·인코딩
+        # 부하만 절반이 된다.
+        # OcrCam 은 base_link **링크** 밑에 있다 (루트에 달면 로봇을 안
+        # 따라간다 — lot._amr 참고). 폴백(원통 로봇)이면 루트 바로 밑.
+        cam_prim = f"{path}/base_link/OcrCam"
+        if not stage.GetPrimAtPath(cam_prim):
+            cam_prim = f"{path}/OcrCam"
+        webcam_graph(stage, cam_prim=cam_prim,
+                     topic=f"amr_images/{ns}/ocr", skip=11,
+                     graph_path=f"/Graphs/ROS_OcrCam_{ns}",
+                     frame_id=f"{ns}/ocr", label=f"{ns} OcrCam")
     if webcam:
         webcam_graph(stage)
     return out

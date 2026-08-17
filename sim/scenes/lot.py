@@ -403,8 +403,17 @@ def _amr(stage, path, center_xy, lamp_rgb, url=None, yaw=0.0):
         m = _mat(stage, f"{path}/Mat_Body", (0.85, 0.85, 0.88), rough=0.4)
         _cyl(stage, f"{path}/Base", 0.09, 0.19, (0, 0, 0.095), axis="Z", mat=m)
 
-    _cyl(stage, f"{path}/Lamp", 0.035, 0.04, (0, 0, TB3_TOP + 0.02), axis="Z",
-         mat=_mat(stage, f"{path}/Mat_Lamp", lamp_rgb, rough=0.2))
+    # 🚨 경광등·카메라는 로봇 **루트가 아니라 base_link 링크** 밑에 단다.
+    #    물리는 아티큘레이션 링크만 움직이고 루트 Xform 은 저작 자세에
+    #    남는다 — 루트에 달면 로봇이 굴러가도 장구가 시작 위치에 붙박이가
+    #    된다 (실측: 주행 중 OcrCam 이 계속 시작 지점 장면만 찍었고, 프레임에
+    #    자기 자신이 지나가는 게 보였다). 라이다를 base_scan 링크에 다는
+    #    것과 같은 이유다 (ros_bridge.add_lidar 머리말).
+    #    base_link 원점은 지면 위 ~0.01 m — 로컬 z 에서 그만큼 뺀다.
+    mount = f"{path}/base_link" if url else path
+    z0 = 0.01 if url else 0.0
+    _cyl(stage, f"{mount}/Lamp", 0.035, 0.04, (0, 0, TB3_TOP + 0.02 - z0),
+         axis="Z", mat=_mat(stage, f"{path}/Mat_Lamp", lamp_rgb, rough=0.2))
 
     # ── 번호판 촬영 카메라 ──────────────────────────────────────
     # 🔑 TB3 Burger 에는 카메라가 없다 (LDS-01 라이다만. 카메라는 Waffle Pi
@@ -423,12 +432,12 @@ def _amr(stage, path, center_xy, lamp_rgb, url=None, yaw=0.0):
     # 🚨 USD 카메라는 자기 좌표계에서 -Z 를 본다. RotateXYZ 는 X→Y→Z 순으로
     #    적용되므로 (90, 0, -90) 이 "-Z 를 +X 로" 돌린다. X 각을 **더 키우면
     #    위를** 본다 (96° = 위로 6°). 84° 로 하면 반대로 바닥을 본다.
-    cam = UsdGeom.Camera.Define(stage, f"{path}/OcrCam")
+    cam = UsdGeom.Camera.Define(stage, f"{mount}/OcrCam")
     cam.CreateHorizontalApertureAttr(OCR_CAM_APERTURE)
     cam.CreateFocalLengthAttr(OCR_CAM_FOCAL)
     cam.CreateClippingRangeAttr(Gf.Vec2f(0.02, 50.0))
     cx = UsdGeom.Xformable(cam)
-    cx.AddTranslateOp().Set(Gf.Vec3d(0.06, 0.0, OCR_CAM_Z))
+    cx.AddTranslateOp().Set(Gf.Vec3d(0.06, 0.0, OCR_CAM_Z - z0))
     cx.AddRotateXYZOp().Set(Gf.Vec3f(90.0 + OCR_CAM_PITCH, 0.0, -90.0))
 
 
