@@ -98,9 +98,12 @@ class Amr1Nav(Node):
         # 현장 판별용 — OcrCam 최신 프레임과 현재 자세(odom → 월드)
         self._cv = CvBridge()
         self._frame = None               # (mono_time, bgr)
+        self._depth = None               # (mono_time, 32FC1 m)
         self._pose = None                # (wx, wy, yaw°)
         self.create_subscription(Image, "amr_images/amr1/ocr",
                                  self._on_image, 5)
+        self.create_subscription(Image, "amr_images/amr1/depth",
+                                 self._on_depth, 5)
         self.create_subscription(Odometry, "/amr1/odom", self._on_odom, 10)
         self.save_frames = None          # 캘리브레이션용 저장 디렉토리
         # 출동 전 목표 검증용 정적 지도 (map_server, transient local)
@@ -145,6 +148,10 @@ class Amr1Nav(Node):
     def _on_image(self, msg):
         self._frame = (time.monotonic(), self._cv.imgmsg_to_cv2(msg, "bgr8"))
 
+    def _on_depth(self, msg):
+        self._depth = (time.monotonic(),
+                       self._cv.imgmsg_to_cv2(msg, "32FC1"))
+
     def _on_odom(self, msg):
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
         yaw = math.degrees(math.atan2(2.0 * (q.w * q.z + q.x * q.y),
@@ -167,8 +174,16 @@ class Amr1Nav(Node):
                 self.get_logger().warn("프레임 대기 시간 초과 — 판별 생략")
                 return None
         frame, (wx, wy, yaw) = self._frame[1], self._pose
+        # depth 는 RGB 와 같은 틱에 발행되지만 도착 순서가 늦을 수 있다 —
+        # RGB 가 신선해진 직후 잠깐(프레임 한두 주기) 더 기다린다.
+        t0 = time.monotonic()
+        while (rclpy.ok() and time.monotonic() - t0 < 6.0
+               and not (self._depth and self._depth[0] > t_arrival)):
+            rclpy.spin_once(self, timeout_sec=0.3)
+        depth = self._depth[1] if (
+            self._depth and self._depth[0] > t_arrival) else None
 
-        res = zone_classify.classify(frame, wx, wy, yaw)
+        res = zone_classify.classify(frame, wx, wy, yaw, depth=depth)
         self.get_logger().info(
             f"판별: zone={res['zone_type']} vehicle={res['vehicle_type']} "
             f"(stall={res['stall_id']}, {res['measurements']})")

@@ -149,6 +149,9 @@ def car_width_m(hsv, dist=2.0):
     차체 색이 은색·흰색이면 배경(하늘·바닥)과 HSV 로 안 갈라져서, 색과
     무관하게 어두운 **하부**의 좌우 끝으로 폭을 잰다. 관측점이 번호판에서
     2 m 로 고정이라 픽셀→미터 환산이 성립한다.
+
+    ⚠ 그림자가 실루엣에 섞여 과대 측정된다 (실측 2.76 m, 실제 1.8) —
+       depth 프레임이 있으면 car_width_depth 가 우선이다.
     """
     band = hsv[ground_row(3.0):ground_row(1.2)]
     dark = (band[..., 2] <= DARK_V_MAX)
@@ -158,8 +161,40 @@ def car_width_m(hsv, dist=2.0):
     return float((cols[-1] - cols[0]) * dist / F_PX)
 
 
-def classify(frame_bgr, wx, wy, yaw_deg):
+def car_width_depth(depth):
+    """차폭 추정(m) — depth(distance_to_image_plane, 32FC1)로.
+
+    차체 높이 대역(rows 300~500)에서 근거리(0.5~4 m) 픽셀만 차다 —
+    그림자는 바닥이라 그 행에서는 4 m 너머(제외), 하늘·먼 벽도 제외.
+    이미지 중앙에서 이어진 열 성분만 취해 프레임 가장자리에 걸린 이웃
+    차를 배제하고, 성분의 중앙값 거리로 픽셀→미터 환산한다.
+    """
+    band = depth[300:500, :]
+    near = np.isfinite(band) & (band > 0.5) & (band < 4.0)
+    cols = near.mean(axis=0) > 0.3
+    if not cols.any():
+        return None
+    c = len(cols) // 2
+    if not cols[c]:                      # 중앙이 비면 가장 가까운 성분으로
+        idx = np.where(cols)[0]
+        c = idx[np.argmin(np.abs(idx - c))]
+    lo = c
+    while lo > 0 and cols[lo - 1]:
+        lo -= 1
+    hi = c
+    while hi < len(cols) - 1 and cols[hi + 1]:
+        hi += 1
+    seg = band[:, lo:hi + 1]
+    d = float(np.median(seg[near[:, lo:hi + 1]]))
+    return float((hi - lo + 1) * d / F_PX)
+
+
+def classify(frame_bgr, wx, wy, yaw_deg, depth=None):
     """관측 지점에서의 최종 판단.
+
+    Args:
+        depth: OcrCam depth 프레임 (32FC1, 미터). 있으면 경차 차폭을
+            그림자 없이 정확히 잰다 (car_width_depth).
 
     Returns:
         dict(zone_type, vehicle_type(None=OCR 단계로 보류), stall_id,
@@ -190,9 +225,13 @@ def classify(frame_bgr, wx, wy, yaw_deg):
         meas["red_px"] = is_fire_truck(hsv)
         vehicle = "NORMAL" if meas["red_px"] >= RED_PX_MIN else "ILLEGAL"
     elif zone == "COMPACT":
-        meas["car_width_m"] = car_width_m(hsv)
-        vehicle = ("NORMAL" if meas["car_width_m"] is not None
-                   and meas["car_width_m"] <= COMPACT_MAX_W else "ILLEGAL")
+        w = car_width_depth(depth) if depth is not None else None
+        meas["width_by"] = "depth" if w is not None else "dark"
+        if w is None:
+            w = car_width_m(hsv)
+        meas["car_width_m"] = w
+        vehicle = ("NORMAL" if w is not None and w <= COMPACT_MAX_W
+                   else "ILLEGAL")
     elif zone == "EV":
         meas["plate_blue_px"] = has_blue_plate(hsv)
         vehicle = "NORMAL" if meas["plate_blue_px"] >= PLATE_PX_MIN else "ILLEGAL"

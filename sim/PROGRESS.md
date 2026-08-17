@@ -38,9 +38,15 @@
 9. **번호판 OCR** — `sim/vision/plate_ocr.py` (3중 로컬라이저 + tesseract
    다수결) + `amr1_nav` 통합: ILLEGAL → OCR → `POST /api/vehicle/`
    (plate, amr_vehicle_x/y=관측점, ocr_image_path) → **SCANNED**.
-   DISABLED 는 `/api/disabled/<판>/` 조회로 최종 판정. **seed 7 불법 6건
-   전부 정답 번호판으로 SCANNED** (33아2341·56차5070·80하1968·84파1812·
-   89사9133·84사7101). 실패 시 DETECTED 유지→재방문. 상세·함정은 WORKLOG.
+   DISABLED 는 `/api/disabled/<판>/` 조회로 최종 판정. 실패 시 DETECTED
+   유지→재방문. 상세·함정은 WORKLOG.
+10. **depth 채널 + 차폭 개선** — OcrCam render product 공유로
+    `amr_images/<ns>/depth` (32FC1) 발행. 경차 차폭을 depth 로 측정
+    (그림자 배제): 세단 실측 1.77 m (구방식 2.75). 실물 이관 시 depth
+    카메라 장착 필요 ("되돌릴 것").
+11. **통짜 리허설 통과** — 클린 DB 에서 **단일 --all 순회**로 시나리오
+    완주: 재탐지 11/11 → 불법 6건 SCANNED(번호판 6/6 정답, 전 건 OCR
+    1회 성공) + 정상 스킵 + 도달불가 즉시 생략.
 
 ## ⚠ 알려진 공백
 
@@ -136,3 +142,4 @@ PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr1_nav.py --all
 | behavior spin | 0.6~0.8 rad/s | 기본값 |
 | 전역 코스트맵 반경 | 0.28 (차 사이 틈 차단) | 실물 주차장 기하에 맞게 재검토 |
 | 구역색 HSV 임계값 | 렌더 실측 (zone_classify.py) | 실물 카메라로 재캘리브레이션 |
+| depth 차폭 측정 | 렌더 depth AOV | **RealSense 급 장착** 필요 (없으면 구방식 폴백) |

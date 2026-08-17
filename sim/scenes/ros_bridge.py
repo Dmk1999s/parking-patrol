@@ -269,7 +269,8 @@ def webcam_graph(stage, cam_prim="/World/Webcam1",
                  topic="webcam_images/webcam1/detections",
                  resolution=(1280, 720), skip=5,
                  graph_path="/Graphs/ROS_Webcam1",
-                 frame_id="webcam1", label="webcam1"):
+                 frame_id="webcam1", label="webcam1",
+                 depth_topic=None):
     """오버헤드 웹캠을 `sensor_msgs/Image` 로 발행 — 기존 시스템이 받는 쪽이다.
 
     토픽 이름은 `bridge/bridge_webcam.py` 가 구독하는 것과 **글자까지 같아야
@@ -292,28 +293,45 @@ def webcam_graph(stage, cam_prim="/World/Webcam1",
         raise RuntimeError(f"웹캠 프림이 없다: {cam_prim}")
     rp = rep.create.render_product(cam_prim, resolution=resolution)
 
+    nodes = [
+        ("Tick", "omni.graph.action.OnPlaybackTick"),
+        ("Publish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+    ]
+    connect = [("Tick.outputs:tick", "Publish.inputs:execIn")]
+    values = [
+        ("Publish.inputs:renderProductPath", rp.path),
+        ("Publish.inputs:topicName", topic),
+        ("Publish.inputs:type", "rgb"),
+        ("Publish.inputs:frameId", frame_id),
+        ("Publish.inputs:frameSkipCount", skip),
+    ]
+    if depth_topic:
+        # 같은 render product 에서 depth(AOV)도 뽑는다 — 렌더는 한 번이라
+        # 추가 부담이 작다 (32FC1 distance_to_image_plane, 미터).
+        # 판별 노드가 차체/그림자를 거리로 가르는 데 쓴다 (pipe 프로젝트의
+        # distance_to_camera annotator 방식을 ROS 발행으로 옮긴 것).
+        nodes.append(("PublishDepth", "isaacsim.ros2.bridge.ROS2CameraHelper"))
+        connect.append(("Tick.outputs:tick", "PublishDepth.inputs:execIn"))
+        values += [
+            ("PublishDepth.inputs:renderProductPath", rp.path),
+            ("PublishDepth.inputs:topicName", depth_topic),
+            ("PublishDepth.inputs:type", "depth"),
+            ("PublishDepth.inputs:frameId", frame_id),
+            ("PublishDepth.inputs:frameSkipCount", skip),
+        ]
+
     keys = og.Controller.Keys
     og.Controller.edit(
         {"graph_path": graph_path, "evaluator_name": "execution"},
         {
-            keys.CREATE_NODES: [
-                ("Tick", "omni.graph.action.OnPlaybackTick"),
-                ("Publish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
-            ],
-            keys.CONNECT: [
-                ("Tick.outputs:tick", "Publish.inputs:execIn"),
-            ],
-            keys.SET_VALUES: [
-                ("Publish.inputs:renderProductPath", rp.path),
-                ("Publish.inputs:topicName", topic),
-                ("Publish.inputs:type", "rgb"),
-                ("Publish.inputs:frameId", frame_id),
-                ("Publish.inputs:frameSkipCount", skip),
-            ],
+            keys.CREATE_NODES: nodes,
+            keys.CONNECT: connect,
+            keys.SET_VALUES: values,
         },
     )
     print(f"[ros] {label}: {topic} 발행 ({resolution[0]}×{resolution[1]}, "
-          f"시뮬 {60 // (skip + 1)} Hz)")
+          f"시뮬 {60 // (skip + 1)} Hz"
+          + (f", depth → {depth_topic}" if depth_topic else "") + ")")
     return rp.path
 
 
@@ -354,7 +372,8 @@ def wire(stage, robots, webcam=True, cam_robots=None):
         webcam_graph(stage, cam_prim=cam_prim,
                      topic=f"amr_images/{ns}/ocr", skip=11,
                      graph_path=f"/Graphs/ROS_OcrCam_{ns}",
-                     frame_id=f"{ns}/ocr", label=f"{ns} OcrCam")
+                     frame_id=f"{ns}/ocr", label=f"{ns} OcrCam",
+                     depth_topic=f"amr_images/{ns}/depth")
     if webcam:
         webcam_graph(stage)
     return out
