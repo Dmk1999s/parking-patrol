@@ -1,0 +1,220 @@
+# Nav2 설정 — AMR1 이 저장된 지도(sim/slam/maps/parking) 위에서 돈다.
+#
+#   patrol_ros
+#   ros2 launch sim/nav2/nav2_amr1.launch.py
+#
+# ## 좌표계 — map 프레임 = amr1/odom 프레임 (정합 근거)
+#
+# 지도는 slam_toolbox 를 **스캔 매칭 없이**(slam_params.yaml) 돌려 만들었다.
+# 매칭이 없으면 보정이 0 이라 map→odom 은 항상 항등이고, 지도는 사실상
+# odom 프레임에 그려졌다. 그래서 여기서는 AMCL 없이 **정적 TF
+# map→amr1/odom(항등)** 만 발행한다 (런치 파일). 시뮬 odom 이 참값이라
+# 재국지화(localization)가 필요 없다.
+#
+#   odom = world - AMR_START[0](1.2, -3.0)   (explore_amr1.py 와 같은 규칙)
+#   → 월드 좌표 목표는 map 좌표로 (x-1.2, y+3.0) 해서 넣는다 (amr1_nav.py)
+#
+# 지도 실측: 560×376 @0.05 m, 원점 (-0.382, -0.499)
+#   → map x∈(-0.38, 27.6), y∈(-0.50, 18.3) = world x∈(0.8, 28.8), y∈(-3.5, 15.3)
+#   순찰 경로가 지나간 영역과 정확히 일치 — 관측 좌표(통로 위)는 전부 안이다.
+#
+# ⚠ 실물 이관 시: AMCL(또는 slam_toolbox localization 모드)로 바꾸고 정적
+#   TF 를 없앨 것. 속도 상한도 0.2 로 (PROGRESS 의 "되돌릴 것" 표).
+#
+# 프레임·토픽은 ros_bridge.py 와 짝: /amr1/scan · /amr1/odom · /amr1/cmd_vel,
+# 프레임 amr1/odom → amr1/base_link → amr1/base_scan. 노드는 전부 /amr1
+# 네임스페이스에서 돌므로 상대 이름 cmd_vel → /amr1/cmd_vel 로 저절로 붙는다.
+# (tf2 는 네임스페이스와 무관하게 /tf 절대 경로를 쓴다.)
+#
+# 🚨 use_sim_time — 씬이 /clock 을 발행한다. 하나라도 빠지면 TF 시간이
+#    어긋나 "오류 없이 안 움직이는" 상태가 된다 (slam_params.yaml 참고).
+# transform_tolerance 류가 기본값보다 큰 것은 시뮬이 실시간보다 느려서다.
+
+/**/bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: amr1/base_link
+    odom_topic: /amr1/odom
+    bt_loop_duration: 10
+    default_server_timeout: 50          # 시뮬이 느려 액션 서버 응답에 여유
+    transform_tolerance: 0.5
+
+/**/controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 10.0          # 20 은 rtf 낮을 때 루프가 밀린다
+    min_x_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 1.0
+    odom_topic: /amr1/odom
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.3
+      movement_time_allowance: 30.0     # 시뮬 감속 감안 (기본 10)
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: True
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25          # OcrCam 이 진행 방향(+X)을 보므로 yaw 가 중요
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.35                   # 순찰과 같은 값. ⚠ 실물은 0.2
+      max_vel_y: 0.0
+      max_vel_theta: 1.0
+      # 🚨 제자리 회전 데드존 (실측): wz 0.37 → 전혀 안 돌고, 0.5 → 실효
+      #    0.05, 0.7 → 0.11 rad/s. 컨벡스 근사 바퀴의 정지 마찰 특성이다.
+      #    함정은 폐루프와의 결합 — DWB 는 odom 속도에서 acc_lim×dt 만큼만
+      #    올린 샘플을 내는데(정지 시 3.2×0.1s=0.32), 0.32 는 데드존이라
+      #    로봇이 안 돌고 odom 이 0 그대로 → 다음 샘플도 0.32 → 영구 정지.
+      #    → 회전 가속 한계를 키워 한 주기에 0.8 까지 점프하게 하고,
+      #      (min_speed_xy, min_speed_theta) 로 데드존 샘플을 걸러낸다
+      #      (제자리 회전은 |wz|≥0.6 이어야 유효, 병진 ≥0.05 는 그대로 허용).
+      #    ⚠ 실물 TB3 는 이 데드존이 없다 — 기본값(3.2 / 0.0)으로 되돌릴 것.
+      min_speed_xy: 0.05
+      max_speed_xy: 0.35
+      min_speed_theta: 0.6
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 8.0
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -8.0
+      vx_samples: 20
+      vy_samples: 0
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.5
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
+                "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+/**/local_costmap:
+  ros__parameters:
+    use_sim_time: true
+    update_frequency: 5.0
+    publish_frequency: 2.0
+    global_frame: amr1/odom
+    robot_base_frame: amr1/base_link
+    rolling_window: true
+    width: 5
+    height: 5
+    resolution: 0.05
+    robot_radius: 0.11                  # TB3 Burger 0.138×0.178 m
+    transform_tolerance: 0.5
+    plugins: ["obstacle_layer", "inflation_layer"]
+    obstacle_layer:
+      plugin: "nav2_costmap_2d::ObstacleLayer"
+      enabled: True
+      observation_sources: scan
+      scan:
+        topic: /amr1/scan
+        max_obstacle_height: 2.0
+        clearing: True
+        marking: True
+        data_type: "LaserScan"
+        raytrace_max_range: 8.0         # 사거리 20 m 를 다 넣을 필요 없다
+        raytrace_min_range: 0.0
+        obstacle_max_range: 6.5
+        obstacle_min_range: 0.0
+    inflation_layer:
+      plugin: "nav2_costmap_2d::InflationLayer"
+      cost_scaling_factor: 3.0
+      inflation_radius: 0.55
+    always_send_full_costmap: True
+
+/**/global_costmap:
+  ros__parameters:
+    use_sim_time: true
+    update_frequency: 1.0
+    publish_frequency: 1.0
+    global_frame: map
+    robot_base_frame: amr1/base_link
+    robot_radius: 0.11
+    resolution: 0.05
+    track_unknown_space: true           # 차량 내부(미탐사 회색)는 모르는 곳으로 둔다
+    transform_tolerance: 0.5
+    plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+    static_layer:
+      plugin: "nav2_costmap_2d::StaticLayer"
+      map_subscribe_transient_local: True
+      map_topic: /map                   # map_server 는 네임스페이스 밖 (런치 참고)
+    obstacle_layer:
+      plugin: "nav2_costmap_2d::ObstacleLayer"
+      enabled: True
+      observation_sources: scan
+      scan:
+        topic: /amr1/scan
+        max_obstacle_height: 2.0
+        clearing: True
+        marking: True
+        data_type: "LaserScan"
+        raytrace_max_range: 8.0
+        raytrace_min_range: 0.0
+        obstacle_max_range: 6.5
+        obstacle_min_range: 0.0
+    inflation_layer:
+      plugin: "nav2_costmap_2d::InflationLayer"
+      cost_scaling_factor: 3.0
+      inflation_radius: 0.55
+    always_send_full_costmap: True
+
+/**/planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true               # 지도 밖(남쪽 y<-3.5 시작 지점)에서도 출발 가능해야 한다
+
+/**/behavior_server:
+  ros__parameters:
+    use_sim_time: true
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    global_frame: amr1/odom
+    robot_base_frame: amr1/base_link
+    transform_tolerance: 0.5
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.8             # 제자리 회전 데드존(위 FollowPath 주석) 위로
+    min_rotational_vel: 0.6
+    rotational_acc_lim: 3.2
+
+# map_server 는 네임스페이스 밖(/map_server)에서 돈다 — 지도는 로봇 공용이고
+# RViz(patrol.rviz)가 /map 을 보기 때문. 런치 파일이 yaml 경로를 넣는다.
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    frame_id: map

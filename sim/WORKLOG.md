@@ -81,3 +81,53 @@
 1. 자리당 3프레임 연속 점유라야 확정 (노이즈 디바운스)
 2. 노드 `confirmed` — 자리당 확정 1회
 3. 브리지 `_sent_coords` — 반올림 좌표당 POST 1회 → DB 자리당 1건
+
+---
+
+## 세션 3 (2026-08-17) — Nav2 기동 + AMR1 자율 출동 ✅
+
+### Nav2 구성 (`sim/nav2/` 신규)
+- `apt` 로 navigation2 + nav2-bringup 설치.
+- `nav2_params_amr1.yaml` + `nav2_amr1.launch.py` — map_server(공용 /map) ·
+  planner · controller(DWB) · behaviors · bt_navigator 를 `/amr1` 네임스페이스로.
+  nav2_bringup 런치를 안 쓴 이유는 launch 파일 머리말 참고.
+- **AMCL 없음** — 지도를 스캔 매칭 없이 만들어 map 프레임 = amr1/odom 프레임.
+  정적 TF `map→amr1/odom`(항등) 하나로 끝. 월드↔map 변환은
+  `map = world − AMR_START[0]` (params yaml 머리말에 근거 정리).
+- `amr1_nav.py` — `GET /api/parking/next/` 좌표 1회 수신 → NavigateToPose.
+  DB 에 yaw 가 없어 좌표에서 복원 (통로 서쪽 절반 180° / 동쪽 절반 0° /
+  통로 밖 90° — webcam_detect 와 같은 규칙). `--all`(전 이벤트 순방문),
+  `--goal`(수동 목표) 지원. 종료 시그널에서 목표 취소 (무인 주행 방지).
+
+### 🚨 함정 1 — 지도에 로봇 유령이 박혀 출발부터 막혔다
+NavFn 은 lethal(254)뿐 아니라 **inscribed(253)도 통과 불가**로 본다. 그런데
+저장된 지도에 **AMR1 시작 위치 자체에 2px, AMR2 주차 위치에 26px** 점유
+블롭이 있었다(매핑 중 라이다에 찍힌 것). 시작 셀 주변이 전부 inscribed 라
+로봇이 자기 유령에 갇혀 "GridBased: failed to create plan" 만 반복 —
+코스트맵을 ASCII 덤프해서야 보였다. → 두 블롭만 205(미탐사)로 지움
+(원본은 git). **지도를 다시 만들면 같은 정리가 또 필요하다.**
+
+### 🚨 함정 2 — 제자리 회전 데드존 × DWB 폐루프 = 영구 정지
+실측 (정지 상태에서 cmd_vel 직접 발행, 벽시계 8초):
+
+    wz 0.37 → Δyaw 0.1° (전혀 안 돎)   wz 0.5 → 실효 0.049 rad/s
+    wz 0.7 → 실효 0.109 rad/s
+
+컨벡스 근사 바퀴의 정지 마찰 특성으로 저속 회전 명령은 그냥 씹힌다.
+문제는 DWB 와의 결합: 샘플은 odom 속도 ± acc_lim×dt 라 정지에서 최대
+3.2×0.1s=**0.32** — 데드존 안이다. 로봇이 안 도니 odom 이 0 그대로고 다음
+샘플도 0.32 → **오류 없이 영원히 제자리**. "Failed to make progress" 로만
+드러난다. → `acc_lim_theta 8.0`(한 주기에 0.8 도달) +
+`min_speed_xy 0.05` / `min_speed_theta 0.6`(데드존 샘플 제거) +
+behavior spin 0.6~0.8. **⚠ 실물 TB3 는 데드존이 없다 — 기본값으로 되돌릴 것.**
+
+### 검증 — DB 11건 전체 방문 (`amr1_nav.py --all`)
+**9/11 도착 ✅.** 블록A 앞 4건 · 블록B 앞 3건 · 소방 1건 · 벽쪽 남단 1건
+전부 성공, yaw 복원 규칙(180/0/90°)도 도착 자세로 확인.
+
+실패 2건(id31·id30)은 **벽쪽 세로주차 2·3번 차** — 차간 간격이 0.5 m 라
+"번호판(-Y) 남쪽 2 m" 관측점이 **이웃 차 내부**에 떨어진다. 기하적으로
+남단 차만 접근 가능하다. layout.py 는 가운데 차만 `blocked` 로 표시하지만
+실제로는 3번 차도 번호판 접근이 안 된다 — 시나리오에서 벽쪽은 남단 1대만
+단속 가능한 것으로 정리하든지, webcam_detect 의 벽쪽 obs 정책을 바꾸든지
+**팀 결정 필요** (PROGRESS 공백란에 올림).
