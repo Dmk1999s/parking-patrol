@@ -1,4 +1,4 @@
-# 진행 기록 — Isaac Sim 주차 단속 시뮬 (2026-08-17 세션 3, 구역 판별까지)
+# 진행 기록 — Isaac Sim 주차 단속 시뮬 (2026-08-17 세션 3 종료 — 시나리오 완주)
 
 다음 세션에서 이 파일부터 읽는다. 세션별 상세 기록은 `sim/WORKLOG.md`,
 원리·함정은 `sim/README.md` 에 있다. 여기는 **무엇이 끝났고, 다음에
@@ -47,6 +47,11 @@
 11. **통짜 리허설 통과** — 클린 DB 에서 **단일 --all 순회**로 시나리오
     완주: 재탐지 11/11 → 불법 6건 SCANNED(번호판 6/6 정답, 전 건 OCR
     1회 성공) + 정상 스킵 + 도달불가 즉시 생략.
+12. **AMR2 (Police 2)** — `sim/nav2/amr2_nav.py` + amr2 용 Nav2 스택
+    (`nav2_params_amr2.yaml`·`nav2_amr2.launch.py`, amr1 런치 위에 얹음).
+    `GET /api/vehicle/next/` 루프 → 관측점 이동 → OCR 재확인 → verify.
+    **seed 7: 6/6 매치 → WARNING_ISSUED, 복귀 완료** — 전체 status 흐름
+    (DETECTED→SCANNED→WARNING_ISSUED) 시뮬 완주. 씬은 `--robots both`.
 
 ## ⚠ 알려진 공백
 
@@ -79,10 +84,10 @@ DB_HOST= venv/bin/python manage.py runserver 0.0.0.0:8000 --noreload &
 ./sim/slam/rviz_web.sh
 
 # 2. 씬 — 스트리밍 끄고 (화면은 8000 웹캠 MJPEG 로 본다). 로딩 수 분.
+#    AMR1 만 돌릴 땐 --robots amr1 이 빠르다 (라이다 1대).
 ISAAC_STREAM=0 PATROL_PRJ="$PWD" ROS_DOMAIN_ID=2 RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
   OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 \
-  ~/isaacsim_venv/bin/python sim/scenes/patrol.py --seed 7 --robots amr1 --report 10 &
-# AMR2 시나리오까지 가면 --robots both
+  ~/isaacsim_venv/bin/python sim/scenes/patrol.py --seed 7 --robots both --report 10 &
 
 # 3. ROS 쪽 (source /opt/ros/humble/setup.bash, ROS_DOMAIN_ID=2)
 PATROL_SERVER=http://127.0.0.1:8000 python3 bridge/bridge_webcam.py &
@@ -91,12 +96,18 @@ PATROL_SERVER=http://127.0.0.1:8000 python3 sim/vision/amr_cam_bridge.py --gate 
 PATROL_SERVER=http://127.0.0.1:8000 python3 sim/vision/amr_cam_bridge.py --robot amr2 --gate &
 # ↑ AMR OcrCam → 대시보드 (출동 중에만 실화면, 대기 중 STANDBY — 사용자 확정)
 
-# 4. Nav2 (씬이 뜬 다음 — /clock·/tf 필요)
-ros2 launch sim/nav2/nav2_amr1.launch.py &
+# 4. Nav2 (씬이 뜬 다음 — /clock·/tf 필요). amr2 는 amr1 런치 위에 얹는다.
+ros2 launch sim/nav2/nav2_amr1.launch.py &     # 지도 + amr1 스택
+ros2 launch sim/nav2/nav2_amr2.launch.py &     # amr2 스택 (--robots both 일 때)
+# ⚠ map_server 활성화가 응답 유실로 inactive 에 머물면:
+#   ros2 lifecycle set /map_server activate
 
-# 5. AMR1 출동 + 현장 판별 (검증은 --all, 시나리오는 무옵션 = next 1건)
-#    도착마다 구역/차종 판별 후 PATCH. --no-classify 로 판별 끌 수 있다.
+# 5. AMR1 출동 + 판별 + OCR (검증은 --all, 시나리오는 무옵션 = next 1건)
+#    도착마다 구역/차종 판별→PATCH, 불법이면 OCR→vehicle POST(SCANNED).
 PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr1_nav.py --all
+
+# 6. AMR2 재확인 + 경보 (SCANNED 소진까지 돌고 시작 좌표로 복귀)
+PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr2_nav.py
 ```
 
 - 이전 세션 이벤트가 DB 에 남아 있으면 `/api/parking/list/` 로 id 확인 후
@@ -110,23 +121,23 @@ PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr1_nav.py --all
 
 ---
 
-## 📋 남은 것 (시나리오 순서)
+## 📋 남은 것
 
-1. **AMR2 시나리오** — AMR1 복귀 후 출동, `GET /api/vehicle/next/` →
-   Nav2 로 amr_vehicle_x/y(관측점, 통로 위) 이동 → 번호판 재확인(OCR) →
-   `POST /api/vehicle/verify/` (match→WARNING_ISSUED / 불일치→삭제).
-   씬은 `--robots both`, Nav2 는 amr2 용 파라미터 복제(프레임·토픽 접두사만
-   다름), 카메라 게이트용 `/amr2/on_duty` 발행도 출동 노드가 맡는다.
-   plate_ocr·goal_blocked 는 그대로 재사용.
-2. **NORMAL 이벤트 정리 정책** — 정상 판정(스킵) 이벤트가 DETECTED 로
+시나리오 골격(웹캠 탐지 → AMR1 판별·OCR → AMR2 재확인·경보)은 시뮬에서
+끝까지 완주했다. 남은 것은 정리·정책·동기화다:
+
+1. **NORMAL 이벤트 정리 정책** — 정상 판정(스킵) 이벤트가 DETECTED 로
    영원히 남아 `/api/parking/next/` 가 그 이벤트만 반복 반환한다 —
    무옵션(시나리오) 모드가 진행이 안 된다. 상태 추가(예: CLEARED)나
    삭제 등 서버 쪽 정책이 필요 — 팀 논의.
-3. **웹캠 이탈 처리** — 점유 해제 시 확정 취소 + 브리지에 DELETE 경로 추가.
-4. **벽쪽 세로주차 정책** — 남단 1대만 단속할지, obs 좌표 정책을 바꿀지
+2. **웹캠 이탈 처리** — 점유 해제 시 확정 취소 + 브리지에 DELETE 경로 추가.
+3. **벽쪽 세로주차 정책** — 남단 1대만 단속할지, obs 좌표 정책을 바꿀지
    (위 공백란). 팀과 논의.
-5. **팀 코드 동기화 + Supabase 전환** — 팀의 최신 서버 코드(마이그레이션
+4. **팀 코드 동기화 + Supabase 전환** — 팀의 최신 서버 코드(마이그레이션
    0013~0015 포함)를 받아 맞춘 뒤 `.env` 로 전환 (위 공백란).
+5. **미검증 분기** — verify 불일치(match=false→삭제), 경차구역의 진짜
+   경차(차폭 depth ~1.57 예상), DISABLED 등록 차량(스킵 분기), OCR 반복
+   실패 시 운영자 에스컬레이션.
 
 ## ⚠ 실물 이관 시 되돌릴 것 모음
 

@@ -301,3 +301,24 @@ depth AOV(`32FC1` distance_to_image_plane, m)를 `amr_images/<ns>/depth` 로
 - 불법 6건 전부 SCANNED, 번호판 6/6 정답, **전 건 OCR 1회 시도 성공**
 - 정상 3건(NORMAL 2·EV 1) 스킵, 도달 불가 2건 즉시 출동 생략
 - 모든 픽스(확대 ROI·p5 링·크로마 블러·free_thresh·goal_blocked) 동시 검증
+
+### AMR2 (Police 2) 시나리오 ✅ — 전체 status 흐름 완주
+씬 `--robots both` + AMR2 용 Nav2 스택 + `amr2_nav.py` (신규):
+
+- **Nav2 amr2**: `nav2_params_amr2.yaml` (amr1 을 sed 치환한 사본 — amr1 을
+  고치면 같이 갱신), `nav2_amr2.launch.py` — amr1 런치의 map_server 를
+  공유하고 정적 TF `map→amr2/odom = AMR_START[1]−AMR_START[0] = (2,0)` 만
+  추가. 데드존·좁은 틈 방어 파라미터 동일.
+- **amr2_nav.py**: `GET /api/vehicle/next/` 루프 — amr_vehicle_x/y(AMR1 이
+  섰던 관측점)로 이동 → plate_ocr 재확인 → DB 번호판 대조 →
+  `POST /api/vehicle/verify/`. null 이면 시작 좌표로 복귀 후 종료.
+  ⚠ 좌표 상수가 둘: 지도 변환은 AMR_START[0](공용 map), 자기 odom 은
+  AMR_START[1]. 복귀 목표는 goal_blocked 를 우회한다 (자기 스폰 자리는
+  지도상 미탐사).
+- 예외: OCR 실패 시 verify 를 안 보내고(오삭제 방지) 로컬 보류 —
+  `/next/` 가 같은 건을 다시 주면 종료. 불일치면 match=false(삭제).
+- **검증 (seed 7)**: SCANNED 6건 전부 매치 → **WARNING_ISSUED 6/6**
+  (재확인 OCR 5건 1회·1건 2회 시도 — 재시도가 실전에서 커버), 복귀 완료.
+  전체 흐름 **DETECTED → SCANNED → WARNING_ISSUED** 가 시뮬에서 끝까지
+  돌았다. 불일치(match=false) 분기는 시뮬레이션으로 미검증 — DB 를
+  조작해야 만들 수 있어 보류.
