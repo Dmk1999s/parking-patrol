@@ -151,7 +151,7 @@ SECRET_KEY=...
 DB_NAME=postgres
 DB_USER=postgres.<프로젝트ID>
 DB_PASSWORD=...
-DB_HOST=aws-0-ap-northeast-2.pooler.supabase.com
+DB_HOST=aws-1-ap-northeast-2.pooler.supabase.com
 DB_PORT=6543
 ```
 
