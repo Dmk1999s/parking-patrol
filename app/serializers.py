@@ -23,7 +23,10 @@ class ParkingEventNextSerializer(serializers.ModelSerializer):
 
 class ZoneUpdateSerializer(serializers.Serializer):
     vehicle_type = serializers.ChoiceField(choices=['NORMAL', 'ILLEGAL'])
-    zone_type    = serializers.ChoiceField(choices=['Not', 'NORMAL', 'DISABLED', 'FIRE'])
+    # models.ZONE_CHOICES 와 같은 목록이어야 한다 — COMPACT/EV 가 빠져 있어
+    # 경차·전기차 구역 업데이트가 400 으로 거부되던 것을 모델과 일치시킴.
+    zone_type    = serializers.ChoiceField(
+        choices=['Not', 'NORMAL', 'COMPACT', 'DISABLED', 'EV', 'FIRE'])
 
 
 class VehicleInfoCreateSerializer(serializers.Serializer):
