@@ -4,11 +4,13 @@
     ros2 launch sim/nav2/nav2_amr1.launch.py
 
 띄우는 것:
-    map_server(/map, 네임스페이스 밖) + 정적 TF map→amr1/odom(항등)
-    /amr1 네임스페이스: planner · controller · behaviors · bt_navigator
+    map_server(/map, 네임스페이스 밖)
+    /amr1 네임스페이스: amcl · planner · controller · behaviors · bt_navigator
     라이프사이클 매니저 2개 (지도 / 내비)
 
-좌표계 근거(왜 AMCL 이 없는가)는 nav2_params_amr1.yaml 머리말 참고.
+🚨 세션 6 부터 map→amr1/odom 은 **AMCL 이 추정한다.** 그전까지는 정적 TF
+   (항등)로 국지화를 우회했다 — 시뮬 odom 이 참값이라 가능했던 "커닝"이고
+   실물엔 없다. 근거·전제(외곽 담장)는 nav2_params_amr1.yaml 머리말 참고.
 목표는 amr1_nav.py 가 /amr1/navigate_to_pose 액션으로 넣는다.
 
 nav2_bringup 의 navigation_launch.py 를 안 쓰는 이유: 그쪽은 velocity_smoother
@@ -38,17 +40,17 @@ def generate_launch_description():
             output="screen",
             parameters=[PARAMS, {"yaml_filename": MAP_YAML}],
         ),
-        # map 프레임 = amr1/odom 프레임 (스캔 매칭 없이 만든 지도 — yaml 머리말)
-        Node(
-            package="tf2_ros", executable="static_transform_publisher",
-            name="map_to_amr1_odom", output="screen",
-            arguments=["--frame-id", "map", "--child-frame-id", f"{NS}/odom"],
-            parameters=[sim_time],
-        ),
         Node(
             package="nav2_lifecycle_manager", executable="lifecycle_manager",
             name="lifecycle_manager_map", output="screen",
             parameters=[sim_time, {"autostart": True, "node_names": ["map_server"]}],
+        ),
+
+        # ── 국지화 (/amr1) ────────────────────────────────────────
+        # map→amr1/odom 을 발행한다. 초기 위치는 params 의 set_initial_pose.
+        Node(
+            package="nav2_amcl", executable="amcl",
+            namespace=NS, output="screen", parameters=[PARAMS],
         ),
 
         # ── 내비게이션 (/amr1) ────────────────────────────────────
@@ -73,7 +75,9 @@ def generate_launch_description():
             namespace=NS, name="lifecycle_manager_navigation", output="screen",
             parameters=[sim_time, {
                 "autostart": True,
-                "node_names": ["planner_server", "controller_server",
+                # ⚠ amcl 이 맨 앞 — 활성화 순서대로 올라간다. map→odom TF 가
+                #   없으면 코스트맵이 map 프레임을 못 잡는다.
+                "node_names": ["amcl", "planner_server", "controller_server",
                                "behavior_server", "bt_navigator"],
             }],
         ),

@@ -539,6 +539,18 @@ def build(stage, plan):
              ((wx0 + wx1) / 2, (wy0 + wy1) / 2, layout.WALL_H / 2), mat_wall,
              collide=True)
 
+    # ── 외곽 담장 4면 ──────────────────────────────────────────
+    # AMCL 이 맞힐 특징을 만든다 (layout.FENCE_* 머리말 참고). 바닥 경계
+    # 안쪽으로 두께만큼 들어와 선다 — 담장이 바닥 위에 서야 한다.
+    # 모서리에서 남북 담장과 동서 담장이 겹치는데, 정적 콜라이더라 무해하다.
+    t, fh = layout.FENCE_T, layout.FENCE_H
+    for name, size, center in (
+            ("S", (gx1 - gx0, t, fh), ((gx0 + gx1) / 2, gy0 + t / 2, fh / 2)),
+            ("N", (gx1 - gx0, t, fh), ((gx0 + gx1) / 2, gy1 - t / 2, fh / 2)),
+            ("W", (t, gy1 - gy0, fh), (gx0 + t / 2, (gy0 + gy1) / 2, fh / 2)),
+            ("E", (t, gy1 - gy0, fh), (gx1 - t / 2, (gy0 + gy1) / 2, fh / 2))):
+        _box(stage, f"/World/Fence_{name}", size, center, mat_wall, collide=True)
+
     # ── 주차면 ─────────────────────────────────────────────────
     wc_tex = markings.path_for_wheelchair()
     for st in plan["stalls"]:

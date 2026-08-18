@@ -1,18 +1,28 @@
 # ⚠ 이 파일은 nav2_params_amr1.yaml 을 amr1→amr2 치환해 만든 사본이다.
 #   amr1 쪽을 고치면 여기도 같이 갱신할 것 (sed 's/amr1/amr2/g').
-#   차이는 프레임·토픽 접두사뿐이고 파라미터 값은 동일하다.
+#   🚨 **치환만으로는 안 되는 값이 하나 있다** — `amcl.initial_pose.x` 는
+#      amr2 가 2.0 이다 (AMR_START 차이, 런치의 TF_X 와 같은 값).
+#      나머지는 프레임·토픽 접두사뿐이고 파라미터 값은 동일하다.
 # Nav2 설정 — AMR1 이 저장된 지도(sim/slam/maps/parking) 위에서 돈다.
 #
 #   patrol_ros
 #   ros2 launch sim/nav2/nav2_amr2.launch.py
 #
-# ## 좌표계 — map 프레임 = amr2/odom 프레임 (정합 근거)
+# ## 좌표계 — map→amr2/odom 은 **AMCL 이 추정한다** (세션 6부터)
 #
-# 지도는 slam_toolbox 를 **스캔 매칭 없이**(slam_params.yaml) 돌려 만들었다.
-# 매칭이 없으면 보정이 0 이라 map→odom 은 항상 항등이고, 지도는 사실상
-# odom 프레임에 그려졌다. 그래서 여기서는 AMCL 없이 **정적 TF
-# map→amr2/odom(항등)** 만 발행한다 (런치 파일). 시뮬 odom 이 참값이라
-# 재국지화(localization)가 필요 없다.
+# 지도는 slam_toolbox 를 **스캔 매칭 없이**(slam_params.yaml) 돌려 만든다.
+# 시뮬 odom 이 참값이라 매칭을 끄고 그린 지도가 기하학적으로 가장 정확하고,
+# AMCL 은 그 정확한 지도에 스캔을 맞추는 쪽이다 (매칭을 켜면 지도가 뒤틀린다).
+#
+# 세션 5 까지는 **정적 TF map→amr2/odom(항등)** 으로 국지화를 통째로 우회
+# 했다 — 시뮬 odom 이 참값이니 오차가 0 인 "커닝"이었다. 실물엔 그런 게
+# 없으므로 세션 6 에서 AMCL 로 바꿨다. 전제 조건이 하나 있었다:
+# 🚨 **외곽 담장** (layout.FENCE_*). 예전엔 라이다가 맞힐 게 내부 칸막이
+#    2개와 차들뿐이라 국지화 특징이 부족했다 — 담장을 두르고 유효 광선이
+#    91% 가 됐다 (시작 위치 실측: 서 2.78 · 남 2.61 · 북 19.98 m).
+#
+# 초기 위치는 map 좌표로 준다 (set_initial_pose):
+#   amr2 = (0, 0) yaw 0     amr2 = (2.0, 0.0) yaw 0   ← AMR_START 차이
 #
 #   odom = world - AMR_START[0](1.2, -3.0)   (explore_amr2.py 와 같은 규칙)
 #   → 월드 좌표 목표는 map 좌표로 (x-1.2, y+3.0) 해서 넣는다 (amr2_nav.py)
@@ -21,8 +31,8 @@
 #   → map x∈(-0.38, 27.6), y∈(-0.50, 18.3) = world x∈(0.8, 28.8), y∈(-3.5, 15.3)
 #   순찰 경로가 지나간 영역과 정확히 일치 — 관측 좌표(통로 위)는 전부 안이다.
 #
-# ⚠ 실물 이관 시: AMCL(또는 slam_toolbox localization 모드)로 바꾸고 정적
-#   TF 를 없앨 것. 속도 상한도 0.2 로 (PROGRESS 의 "되돌릴 것" 표).
+# ⚠ 실물 이관 시: 속도 상한을 0.2 로 (PROGRESS 의 "되돌릴 것" 표).
+#   라이다 사거리도 20 → 3.5 (LDS-01) 라 amcl.laser_max_range 를 같이 줄일 것.
 #
 # 프레임·토픽은 ros_bridge.py 와 짝: /amr2/scan · /amr2/odom · /amr2/cmd_vel,
 # 프레임 amr2/odom → amr2/base_link → amr2/base_scan. 노드는 전부 /amr2
@@ -32,6 +42,60 @@
 # 🚨 use_sim_time — 씬이 /clock 을 발행한다. 하나라도 빠지면 TF 시간이
 #    어긋나 "오류 없이 안 움직이는" 상태가 된다 (slam_params.yaml 참고).
 # transform_tolerance 류가 기본값보다 큰 것은 시뮬이 실시간보다 느려서다.
+
+/**/amcl:
+  ros__parameters:
+    use_sim_time: true
+    global_frame_id: map
+    odom_frame_id: amr2/odom
+    base_frame_id: amr2/base_link
+    scan_topic: /amr2/scan          # 네임스페이스 안이라 상대 이름도 되지만 명시
+    map_topic: /map                 # map_server 는 네임스페이스 밖 (런치 참고)
+
+    # ── 초기 위치 — 로봇이 시작 지점에 서 있다는 걸 알고 시작한다.
+    # 실물이라면 RViz 의 2D Pose Estimate 로 찍어 주는 값이다. 안 주면
+    # 파티클이 지도 전체에 퍼져 수렴할 때까지 목표를 못 넣는다.
+    set_initial_pose: true
+    initial_pose: {x: 2.0, y: 0.0, z: 0.0, yaw: 0.0}   # ⚠ amr1 은 0.0 (AMR_START 차이)
+    always_reset_initial_pose: false
+    first_map_only: false
+
+    # ── 라이다 (⚠ 실물 LDS-01 은 3.5 m — 같이 줄일 것)
+    laser_min_range: 0.2
+    laser_max_range: 20.0
+    max_beams: 120                  # 3600 광선을 다 쓰면 CPU 만 먹는다
+    laser_model_type: "likelihood_field"
+    laser_likelihood_max_dist: 2.0
+    sigma_hit: 0.2
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    lambda_short: 0.1
+
+    # ── 운동 모델 — 차동구동. alpha 는 odom 을 얼마나 못 믿는가다.
+    # 시뮬 odom 은 거의 완벽하지만 기본값(0.2)을 그대로 둔다 — 값을 낮추면
+    # 파티클이 안 퍼져서 "커닝을 끈" 의미가 옅어지고, 초기 오차 회복도 못 한다.
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+
+    # ── 파티클 필터
+    max_particles: 2000
+    min_particles: 500
+    pf_err: 0.05
+    pf_z: 0.99
+    resample_interval: 1
+    recovery_alpha_slow: 0.0        # 납치 복구 — 고정 배치 시연엔 불필요
+    recovery_alpha_fast: 0.0
+    update_min_d: 0.25              # 이만큼 움직여야 갱신 (m)
+    update_min_a: 0.2               # 이만큼 돌아야 갱신 (rad)
+    save_pose_rate: 0.5
+    tf_broadcast: true
+    transform_tolerance: 0.5        # 시뮬이 실시간보다 느려 여유를 준다
 
 /**/bt_navigator:
   ros__parameters:

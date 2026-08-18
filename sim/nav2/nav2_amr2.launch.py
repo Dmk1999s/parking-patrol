@@ -27,20 +27,19 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = os.path.join(_HERE, "nav2_params_amr2.yaml")
 
 NS = "amr2"
-# AMR_START[1] - AMR_START[0]  (layout.py 를 바꾸면 여기도)
-TF_X, TF_Y = "2.0", "0.0"
+# 🚨 세션 6: 정적 TF 를 없애고 AMCL 로 바꿨다. 여기 있던 TF_X/TF_Y (2.0, 0.0)
+#    는 nav2_params_amr2.yaml 의 amcl.initial_pose 로 옮겨갔다 — AMR_START[1]
+#    - AMR_START[0] 라는 의미는 그대로다 (layout.py 를 바꾸면 거기도).
 
 
 def generate_launch_description():
     sim_time = {"use_sim_time": True}
 
     return LaunchDescription([
+        # 국지화 — map→amr2/odom (초기 위치는 params 의 set_initial_pose)
         Node(
-            package="tf2_ros", executable="static_transform_publisher",
-            name="map_to_amr2_odom", output="screen",
-            arguments=["--x", TF_X, "--y", TF_Y,
-                       "--frame-id", "map", "--child-frame-id", f"{NS}/odom"],
-            parameters=[sim_time],
+            package="nav2_amcl", executable="amcl",
+            namespace=NS, output="screen", parameters=[PARAMS],
         ),
         Node(
             package="nav2_controller", executable="controller_server",
@@ -63,7 +62,7 @@ def generate_launch_description():
             namespace=NS, name="lifecycle_manager_navigation", output="screen",
             parameters=[sim_time, {
                 "autostart": True,
-                "node_names": ["planner_server", "controller_server",
+                "node_names": ["amcl", "planner_server", "controller_server",
                                "behavior_server", "bt_navigator"],
             }],
         ),
