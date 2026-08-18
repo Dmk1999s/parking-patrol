@@ -82,15 +82,22 @@ PLATE_BLUE = (95, 130, 100, 60)      # EV 파란 번호판
 #    2500 으로 뒀다가 정상 전기차가 기준 미달로 불법 처리된 회귀가 있었다.
 #    SEDAN 흰 판은 0~151 px 라 600 이면 양쪽 다 4배 이상 여유다.
 PLATE_PX_MIN = 600
+PLATE_Z, PLATE_H_M = 0.42, 0.110     # 판 중심 높이·판 높이 (lot.py·plate.py 와 짝)
+PLATE_D_MIN, PLATE_D_MAX = 1.0, 3.0  # 관측점→판 거리 (설계 1.3~2.0 + 도착 오차)
 COMPACT_MAX_W = 1.70                 # 차폭 이하면 경차 (1.55 vs 1.80)
 DARK_V_MAX = 55                      # 차폭 측정용 어두운 픽셀 (바퀴·하부 그림자)
 DARK_COL_MIN = 4                     # 열에 이만큼 쌓여야 차 실루엣
 
 
+def row_at(h, d):
+    """높이 h(m)·거리 d(m) 인 점이 놓이는 이미지 행."""
+    ang = math.radians(CAM_PITCH) + math.atan2(CAM_H - h, d)
+    return int(H / 2 + F_PX * math.tan(ang))
+
+
 def ground_row(d):
     """거리 d(m)의 바닥이 놓이는 이미지 행."""
-    ang = math.radians(CAM_PITCH) + math.atan2(CAM_H, d)
-    return int(H / 2 + F_PX * math.tan(ang))
+    return row_at(0.0, d)
 
 
 def stall_ahead(wx, wy, yaw_deg):
@@ -137,9 +144,19 @@ def is_fire_truck(hsv):
 
 
 def has_blue_plate(hsv):
-    """화면 중앙(번호판 높이)의 파란 번호판 — 전기차 규격."""
+    """번호판이 놓일 수 있는 행 띠의 파란 번호판 — 전기차 규격.
+
+    🚨 예전엔 rows 260:500 고정이라 아래 180 행이 4~6 m 앞 **바닥**이었다
+    (ground_row: 4 m→504, 6 m→488). 먼 바닥의 파란 주차선·장애인 표지가
+    번호판으로 세어져 EV 구역 세단이 정상 처리된 적이 있다 (실측 7823 px,
+    같은 차가 다른 자세에선 0 px — 임계값으로는 못 막는 비결정 결함).
+    판 높이로 띠를 좁히면 바닥은 아무리 멀어도 지평선(row 457) 아래라
+    **원천 배제**된다 — 지금 띠는 206:406.
+    """
     h0, h1, smin, vmin = PLATE_BLUE
-    box = hsv[260:500, 400:880]
+    r0 = row_at(PLATE_Z + PLATE_H_M / 2, PLATE_D_MIN)
+    r1 = row_at(PLATE_Z - PLATE_H_M / 2, PLATE_D_MAX)
+    box = hsv[r0:r1, 400:880]
     return int(_mask(box, h0, h1, smin, vmin).sum())
 
 
