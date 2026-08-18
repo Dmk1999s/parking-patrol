@@ -322,3 +322,159 @@ depth AOV(`32FC1` distance_to_image_plane, m)를 `amr_images/<ns>/depth` 로
   전체 흐름 **DETECTED → SCANNED → WARNING_ISSUED** 가 시뮬에서 끝까지
   돌았다. 불일치(match=false) 분기는 시뮬레이션으로 미검증 — DB 를
   조작해야 만들 수 있어 보류.
+
+---
+
+## 세션 4 (2026-08-18) — 이벤트 종결 정책 ✅
+
+### 배경 — 팀 프로젝트 종료, 개인 작업으로 전환
+원본은 종이 판자 맵 + 실물 TurtleBot4 2대의 팀 프로젝트였고 기간이 끝났다.
+지금부터는 혼자 Isaac Sim + TurtleBot3 로 다시 구현한다. 결과:
+- **팀 Supabase 스키마 동기화 작업 폐기** — 맞출 대상이 없다. 이 저장소
+  스키마가 정답이고 sqlite(`DB_HOST=` 빈값)로 계속 간다.
+  ⚠ 이 저장소의 마이그레이션 0013 은 팀 DB 의 0013 과 **무관한 별개**다.
+- "팀 결정 필요" 로 미뤄 둔 항목(벽쪽 세로주차 정책 등)은 직접 결정한다.
+
+### 🚨 DETECTED 무한 반환 — PROGRESS 에 적힌 것보다 한 갈래 더 있었다
+`/api/parking/next/` 는 가장 오래된 DETECTED 를 준다. 그런데 AMR1 단계에서
+끝나는데도 status 가 안 바뀌는 경로가 **둘**이었다:
+1. **정상 판정 스킵** — `_patch_zone` 이 vehicle_type=NORMAL 만 올리고 끝
+   (PROGRESS 에 적혀 있던 것).
+2. **접근 불가** — `goal_blocked` 로 출동을 생략하면 PATCH 조차 안 나가
+   zone·status 가 전부 그대로. **이쪽이 누락돼 있었다.** `--all` 은 리스트를
+   한 번만 훑어서 안 드러나고, 무옵션(시나리오) 모드에서만 터진다.
+
+실제 DB 가 증거였다 — 리허설 후 남은 DETECTED 5건이 정확히
+정상 스킵 3건(NORMAL 2 + EV 1) + 접근 불가 2건이었다.
+
+### 설계 — status 2개 추가 (삭제 대신)
+삭제가 아니라 종결 상태로 둔 이유: 대시보드에 "정상이라 넘어갔다" /
+"접근을 못 했다" 가 남아야 순찰 결과를 읽을 수 있다.
+
+| 상태 | 언제 | 누가 |
+|---|---|---|
+| `CLEARED` | 정상 주차로 판정 → 스킵 | zone PATCH 에서 **서버가 자동** |
+| `UNREACHABLE` | 관측점이 지도상 장애물/미탐사 | AMR1 이 명시적 PATCH |
+
+- **서버 자동 전환을 고른 이유**: AMR1 은 이미 NORMAL PATCH 를 보내고 있어
+  클라이언트 코드가 0줄 바뀐다. `status == 'DETECTED'` 가드를 둬서
+  SCANNED·WARNING_ISSUED 를 뒤늦은 PATCH 가 되돌리지 못하게 했다.
+- **접근 불가만 별도 엔드포인트**인 이유: `goal_blocked` 는 지도 기하로
+  결정되는 **영구** 실패다. Nav2 의 일시 실패(navigate 가 False 를 주는
+  다른 경로)에는 붙이지 않았다 — 그건 재시도해야 한다.
+- **OCR 실패는 그대로 DETECTED 유지** — 재방문이 의도된 동작이다.
+
+변경: `app/models.py`(STATUS_CHOICES) · `0013_alter_parkingevent_status` ·
+`app/api_views.py`(zone_update 자동 전환 + `parking_unreachable`) ·
+`app/urls.py` · `sim/nav2/amr1_nav.py`(`_patch_unreachable`, navigate 에
+`event_id` 인자) · `templates/monitor_dashboard.html`(배지 2줄).
+
+### 부작용 하나를 같이 고쳤다 — 리셋 절차가 막힘
+`DELETE /api/parking/<id>/delete/` 가 DETECTED 만 허용해서, 새로 만든
+CLEARED·UNREACHABLE 건을 리허설 초기화 때 못 지우게 됐다. 삭제 허용을
+`DELETABLE_STATUSES = (DETECTED, CLEARED, UNREACHABLE)` 로 넓혔다 —
+단속이 끝난 SCANNED·WARNING_ISSUED 는 그대로 거부.
+
+### 검증 — 실제 HTTP 요청 14케이스 (임시 포트 8011, DB 는 백업 후 원복)
+next 가 CLEARED 를 건너뜀 / UNREACHABLE 을 건너뜀 / 둘 다 종결되면
+`event:null` / 이미 종결된 건 재PATCH 400 / 없는 id 404 /
+**ILLEGAL PATCH 는 DETECTED 유지(회귀)** / SCANNED 를 NORMAL PATCH 가
+못 덮음 / summary 가 새 status 집계 / CLEARED·UNREACHABLE 삭제 가능 /
+WARNING_ISSUED 삭제 거부. 전부 통과.
+⚠ 시뮬(Isaac Sim + Nav2)에서의 실주행 재검증은 아직 안 했다 — 서버·노드
+코드만 검증했다.
+
+### 🚨 pkill 함정을 내가 다시 밟았다
+`pkill -f "manage[.]py runserver 127.0.0.1:8011"` 로 브래킷을 넣었는데도
+셸이 같이 죽었다 — **같은 명령줄 앞부분에 서버를 띄운 원문
+(`manage.py runserver 127.0.0.1:8011`)이 그대로 들어 있어서** 그게 매칭됐다.
+브래킷은 패턴에만 넣으면 되는 게 아니라, **기동과 종료를 같은 셸 명령줄에
+두지 말아야** 한다.
+
+### 앞 번호판 추가 + 관측면 선택 ✅ (사용자 결정: 충실도)
+
+**문제 제기(사용자)**: "차량 앞뒤에 번호판이 있을 거 아니야? illegal_2 앞에도
+번호판이 있어야 하잖아." — 확인해 보니 `lot.py` 는 **뒤판(-Y) 하나만** 만들고
+있었다. 한국은 승용차 앞·뒤 번호판이 둘 다 의무라 실제와 다른 단순화였다.
+
+#### 조사에서 나온 추가 사실 — ILLEGAL_Y 주석이 낡았다
+`layout.py:55  ILLEGAL_Y = (3.0, 7.8, 12.6)  # 간격 4.8 → 차 사이 0.5 m`
+세션 3 에서 세단 길이를 4.30 → 4.70 으로 바꿨는데 이 상수는 그대로라 **실제
+차 간격은 0.1 m** 다. "2·3번 차 접근 불가" 의 뿌리가 여기였다.
+
+#### 설계 — 차를 안 옮기고 앞판으로 푼다
+차 3대 몸통 [0.65,5.35] [5.45,10.15] [10.25,14.95] 에 대해:
+
+    illegal_0  남 -1.35 ✅ 빈 공간      북  6.85 ❌ illegal_1 안  → 뒤판 yaw 90°
+    illegal_1  남  3.45 ❌ illegal_0 안  북 11.65 ❌ illegal_2 안  → 둘 다 막힘
+    illegal_2  남  8.25 ❌ illegal_1 안  북 16.42 ✅ 빈 공간      → 앞판 yaw 270°
+
+`layout.py` 자체가 선언한 `blocked=(i == 1)`(가운데만 접근 불가)이 그대로
+복원된다. 둘 다 막힌 차는 **이벤트를 남기고** AMR1 이 UNREACHABLE 로 종결한다
+(아예 안 내보내면 불법차가 있었다는 기록이 사라진다).
+
+변경: `lot.py`(`_plate_quad(facing=±1)` + 앞판) · `models.py`+0014
+(`observation_yaw`) · `serializers.py`(create/next + VehicleInfoNext 가
+**이벤트에서 조인**) · `webcam_detect.py`(`_free_at()` 로 관측면 선택) ·
+`bridge_webcam.py`(마커 orientation → yaw, 그동안 버리고 있었다) ·
+`amr1_nav`/`amr2_nav`(DB yaw 우선, goal_yaw 는 폴백) · `explore_amr1.py`
+(북쪽 띠 15.2 → 16.3 + 웨이포인트 추가).
+
+#### UV — 앞판은 좌우가 뒤집힌다
+뒤판을 보는 관측자는 -Y 에서 +Y 를 보므로 오른쪽이 +X. 앞판을 보는 관측자는
++Y 에서 -Y 를 보므로 **오른쪽이 -X** (d×up = (0,-1,0)×(0,0,1) = (-1,0,0)).
+그래서 `sx = (w/2)·(-facing)` 로 u=1 의 x 부호를 뒤집는다. 거울상이면 오류 없이
+판만 이상해지므로, **OCR 이 정답을 읽는 것으로 검증**했다 (73카8353 1회 성공).
+
+#### 🚨 지도 북쪽은 "로봇이 밟은 데까지만" 늘어난다
+북쪽엔 벽이 없다. 라이다 광선이 아무것도 못 맞히면 **빈 공간이 아예 안 찍힌다**
+(무반사 광선은 free 로도 안 그린다). 그래서 로봇을 16.7 까지 실제로 몰아야
+16.75 까지 free 가 생겼다. 관측 거리를 두 번 조정했다:
+- 1.5 → 관측점 16.62, `goal_blocked`(반경 0.15) 가 16.77 검사 > free 16.75 ❌
+- **1.3 → 16.42, 검사 16.57 ✅, 코스트맵 여유 0.33 > robot_radius 0.28 ✅**
+⚠ 픽셀로 잰 차 코가 layout 값(14.95)보다 ~0.17 m 북으로 나온다(그림자·번짐).
+
+#### 🚨 순찰 중 로봇이 차에 박혔다 (내 웨이포인트 실수)
+`(3.2, 16.7) → (1.2, -3.0)` 직선이 illegal_2 차체(x 2.3~4.1, y 10.25~14.95)를
+관통한다. `explore_amr1` 은 **장애물 회피가 없는 P 제어**다. 로봇이
+(2.19, 14.35) 에 100 시뮬초 정지. 수습:
+- odom 실측 (0.9910, 17.3489) vs 이론 (0.99, 17.35) — **바퀴는 안 헛돌았다.**
+  좌표계가 안 깨져 씬 재시작 없이 계속 갈 수 있었다 (세션 3 의 끼임과 다르다).
+- `cmd_vel linear.x=-0.2` 25 초로 **구출 성공** (세션 3 에선 실패했었다 —
+  그땐 차 **사이**에 꼈고 이번엔 한 면에 눌린 것이라 후진이 통했다).
+- 안전 경로(서쪽 통로 x=0.8 로만 남북, 북쪽 띠 y=16.7 로만 동서)로 재주행.
+
+#### 🚨 map_saver_cli 가 free_thresh 를 0.25 로 덮어쓴다
+yaml 주석에 "0.196 이어야 한다"고 경고돼 있는 그 값이다. 저장할 때마다 기본값
+으로 돌아가므로 **저장 후 반드시 되돌린다.**
+
+#### 지도 검증 — 숫자로 대조 (expected_map PNG 대신)
+차량 11/11 (자리별 점유 288~593px), 벽 A 368px · 벽 B 1095px, AMR2 유령
+197px 제거 후 그 자리 0px. 진짜 장애물은 하나도 안 지워졌다.
+
+### 통짜 리허설 2 ✅ — AMR1 11/11 정답 일치
+    0  NORMAL SEDAN  정상 → NORMAL/NORMAL → CLEARED     ✓
+    2  NORMAL EV     정상 → NORMAL/NORMAL → CLEARED     ✓
+    3  COMPACT SEDAN 불법 → COMPACT/ILLEGAL 80하1968    ✓
+    5  COMPACT SEDAN 불법 → COMPACT/ILLEGAL 84파1812    ✓
+    7  EV EV         정상 → EV/NORMAL(파란판 9465)      ✓
+    8  EV SEDAN      불법 → EV/ILLEGAL(파란판 0) 84사7101 ✓ ← 리허설1 오판
+    9  DISABLED EV   불법 → 89사9133 (미등록)           ✓
+    11 FIRE EV       불법 → FIRE/ILLEGAL 56차5070       ✓
+    illegal_0        불법 → 뒤판 yaw 90°  33아2341      ✓
+    illegal_1        불가 → UNREACHABLE                 ✓
+    illegal_2        불법 → 앞판 yaw 270° 73카8353      ✓ ← 새로 단속
+**SCANNED 7 / CLEARED 3 / UNREACHABLE 1** (예전 5/4/2). 전 건 OCR 1회 성공.
+
+### ⚠ 중단 지점 — AMR2 1/7 에서 인스턴스 종료
+id=104 매치 → WARNING_ISSUED 성공. id=112(벽쪽 북단, yaw 270°)로 이동 중
+중단. **미검증은 "AMR2 가 북쪽 앞판 관측점에 도달하는가" 하나뿐**이다 —
+AMR2 흐름 자체는 같은 세션 앞부분 5/5, 세션 3 6/6 으로 검증돼 있다.
+
+### 🚨 pkill 함정을 세 번 더 밟았다
+브래킷(`amr1_nav[.]py`)을 넣어도 **같은 명령줄 어딘가에 대상 문자열이 그대로
+있으면** 자기 셸이 죽는다. 이번에 걸린 세 형태:
+1. 기동 명령과 종료 명령을 한 줄에 둠 (앞부분의 `manage.py runserver ...` 가 매칭)
+2. 브래킷 없는 대안 패턴 (`pkill -f "controller_server|planner_server|..."`)
+3. **힙독 안의 파일 경로** (`pathlib.Path('sim/vision/webcam_detect.py')`)
+→ **kill 은 다른 아무것도 언급하지 않는 단독 명령으로** 실행할 것.

@@ -256,6 +256,16 @@ class Amr1Nav(Node):
         except Exception as e:
             self.get_logger().warn(f"PATCH 실패: {e}")
 
+    def _patch_unreachable(self, event_id):
+        if event_id is None:
+            return
+        try:
+            r = requests.patch(
+                f"{SERVER}/api/parking/{event_id}/unreachable/", timeout=2)
+            self.get_logger().info(f"PATCH unreachable → {r.status_code}")
+        except Exception as e:
+            self.get_logger().warn(f"PATCH unreachable 실패: {e}")
+
     def _ocr_retry(self, attempts=3):
         """최신 프레임으로 OCR — 실패하면 다음 프레임을 기다려 재시도."""
         last_t = self._frame[0] if self._frame else 0.0
@@ -325,13 +335,16 @@ class Amr1Nav(Node):
         return []
 
     # ── Nav2 ──────────────────────────────────────────────────────
-    def navigate(self, wx, wy, yaw_deg=None):
+    def navigate(self, wx, wy, yaw_deg=None, event_id=None):
         """월드 좌표 목표로 이동. 성공 여부를 돌려준다."""
         rclpy.spin_once(self, timeout_sec=0.2)          # /map 라치 수신 기회
         if self.goal_blocked(wx, wy):
             self.get_logger().warn(
                 f"목표 ({wx:.2f}, {wy:.2f})가 지도상 장애물/미탐사 안 — "
                 "접근 불가, 출동 생략")
+            # 지도 기하로 결정된 영구 실패다 (Nav2 일시 실패와 다르다) —
+            # 종결해 두지 않으면 /api/parking/next/ 가 이 건만 계속 준다.
+            self._patch_unreachable(event_id)
             return False
         if yaw_deg is None:
             yaw_deg = goal_yaw(wx, wy)
@@ -433,7 +446,9 @@ def main():
             done = 0
             for e in events:
                 node.get_logger().info(f"── 이벤트 id={e['id']} ──")
-                if node.navigate(e["observation_x"], e["observation_y"]):
+                if node.navigate(e["observation_x"], e["observation_y"],
+                                 yaw_deg=e.get("observation_yaw"),
+                                 event_id=e["id"]):
                     done += 1
                     if classify:
                         node.classify_here(e["id"])
@@ -443,7 +458,9 @@ def main():
             if e:
                 node.get_logger().info(f"이벤트 id={e['event_id']} 수신 (한 번)")
                 node.set_duty(True)
-                if node.navigate(e["observation_x"], e["observation_y"]) and classify:
+                if node.navigate(e["observation_x"], e["observation_y"],
+                                 yaw_deg=e.get("observation_yaw"),
+                                 event_id=e["event_id"]) and classify:
                     node.classify_here(e["event_id"])
     except (KeyboardInterrupt, SystemExit):
         pass

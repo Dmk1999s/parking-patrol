@@ -85,6 +85,17 @@ M_PER_PX = CAM_Z * layout.WEBCAM["aperture"] / layout.WEBCAM["focal"] / RES[0]
 COLOR_THRESH = 25        # 바닥색과의 채널 거리 (uint8)
 OCC_FRACTION = 0.35      # 점유 박스 안 비바닥 비율이 이보다 크면 차가 있다
 APPROACH_DIST = 2.0      # 번호판 → AMR 거리. lot.approach_pose 의 dist 와 같다
+# 앞판(북쪽)에서 볼 때만 쓰는 거리.
+# 🚨 두 제약이 겹친다. ① 바닥 북단이 17.0 이고 ② 지도의 빈 공간이 16.75
+#    까지다 (북쪽엔 벽이 없어 라이다가 아무것도 못 맞히므로, 로봇이 실제로
+#    밟은 데까지만 지도가 늘어난다). amr1_nav.goal_blocked 는 목표 주변
+#    0.15 m 를 검사하므로 관측점은 16.60 이하여야 하고, 전역 코스트맵
+#    robot_radius 0.28 도 지도 경계 안에 들어가야 한다.
+#    또 픽셀로 잰 차 코가 layout 값(14.95)보다 ~0.17 m 북으로 나온다
+#    (그림자·번짐) — 실측 관측점 = 15.12 + 이 값.
+#    1.5 → 16.62 (검사 16.77 > 16.75 ❌).  1.3 → 16.42 (검사 16.57 ✅,
+#    코스트맵 여유 0.33 > 0.28 ✅).
+APPROACH_DIST_N = 1.3
 CONFIRM_FRAMES = 3       # 연속 N번 점유로 잡혀야 발행 (한 프레임 노이즈 무시)
 PROCESS_EVERY = 5        # 10 Hz 입력을 2 Hz 로 낮춰 처리
 
@@ -136,6 +147,22 @@ def _slots():
 def world_to_px(x, y):
     return (RES[0] / 2.0 + (x - CAM_X) / M_PER_PX,
             RES[1] / 2.0 - (y - CAM_Y) / M_PER_PX)
+
+
+def _free_at(mask, x, y, half=0.30):
+    """관측점 (x, y) 에 로봇이 설 수 있는가 — 주변이 비어 있고 바닥 안인가.
+
+    벽쪽 세로주차처럼 앞뒤로 차가 늘어서면 "번호판에서 N m" 점이 **이웃 차
+    몸통 안**에 떨어진다. 웹캠은 이미 어디에 차가 있는지(mask) 알고 있으니
+    좌표를 내보내기 전에 여기서 걸러 반대쪽 판을 보게 한다.
+    """
+    gx0, gx1, gy0, gy1 = layout.GROUND
+    if not (gx0 + half < x < gx1 - half and gy0 + half < y < gy1 - half):
+        return False
+    u0, u1, v0, v1 = _rect_px(x - half, x + half, y - half, y + half)
+    if u1 <= u0 or v1 <= v0:
+        return False
+    return bool(mask[v0:v1, u0:u1].mean() < 0.10)
 
 
 def _rect_px(x0, x1, y0, y1):
@@ -222,11 +249,21 @@ class WebcamDetect(Node):
                 oy = sl["obs_fix"]
                 yaw = 180.0 if sl["sign"] > 0 else 0.0
             else:
-                # 통로가 -Y 쪽 → 이미지에서는 v 가 큰 쪽이 경계다
-                edge = CAM_Y - (np.percentile(vs, 98) + v0 - RES[1] / 2.0) * M_PER_PX
+                # 통로가 -Y 쪽 → 이미지에서는 v 가 큰 쪽이 경계다.
+                # 차에는 앞·뒤 번호판이 둘 다 있으므로 남/북 두 관측점을
+                # 만들어 **설 수 있는 쪽**을 고른다. 뒤판(남쪽)이 기본이고,
+                # 막혔으면 앞판(북쪽)을 본다. 둘 다 막히면 남쪽을 그대로 두어
+                # 이벤트는 남기고 AMR1 이 UNREACHABLE 로 종결하게 한다.
                 ox = sl["obs_fix"]
-                oy = edge - APPROACH_DIST
-                yaw = 90.0
+                south = CAM_Y - (np.percentile(vs, 98) + v0 - RES[1] / 2.0) * M_PER_PX
+                north = CAM_Y - (np.percentile(vs, 2) + v0 - RES[1] / 2.0) * M_PER_PX
+                cand = [(south - APPROACH_DIST, 90.0),      # 뒤판을 본다
+                        (north + APPROACH_DIST_N, 270.0)]   # 앞판을 본다
+                oy, yaw = cand[0]
+                for c_y, c_yaw in cand:
+                    if _free_at(mask, ox, c_y):
+                        oy, yaw = c_y, c_yaw
+                        break
             seen[sl["key"]] = (ox, oy, yaw)
         return seen
 

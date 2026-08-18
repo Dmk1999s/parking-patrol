@@ -280,7 +280,10 @@ def main():
             eid, plate = v["event_id"], v["plate_number"]
             node.get_logger().info(f"── 이벤트 id={eid} 번호판 {plate} ──")
             node.set_duty(True)
-            if not node.navigate(v["amr_vehicle_x"], v["amr_vehicle_y"]):
+            # AMR1 이 본 것과 같은 면(앞판/뒤판)을 봐야 한다 — 좌표만으로는
+            # 복원할 수 없어 서버가 이벤트의 observation_yaw 를 같이 준다.
+            if not node.navigate(v["amr_vehicle_x"], v["amr_vehicle_y"],
+                                 yaw_deg=v.get("observation_yaw")):
                 node.get_logger().warn("이동 실패 — 보류")
                 skipped.add(eid)
                 continue

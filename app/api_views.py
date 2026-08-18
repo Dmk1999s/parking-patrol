@@ -27,6 +27,7 @@ def parking_create(request):
     event = ParkingEvent.objects.create(
         observation_x=serializer.validated_data['observation_x'],
         observation_y=serializer.validated_data['observation_y'],
+        observation_yaw=serializer.validated_data.get('observation_yaw'),
         status='DETECTED',
     )
     return Response({'status': 'ok', 'event_id': event.id}, status=status.HTTP_201_CREATED)
@@ -44,9 +45,15 @@ def parking_list(request):
     return Response(serializer.data)
 
 
+# 단속이 진행 중이지 않은 상태 — 삭제해도 진행 중인 절차를 깨지 않는다.
+DELETABLE_STATUSES = ('DETECTED', 'CLEARED', 'UNREACHABLE')
+
+
 @extend_schema(
     summary="[웹캠] 차량 이동 시 기존 탐지 기록 삭제",
-    description="차량이 이동하여 좌표가 바뀐 경우, 기존 DETECTED 상태 이벤트를 삭제. DETECTED 상태가 아니면 삭제 불가.",
+    description="차량이 이동하여 좌표가 바뀐 경우 기존 이벤트를 삭제. "
+                "단속 진행 중이 아닌 DETECTED / CLEARED / UNREACHABLE 만 삭제 가능 "
+                "(SCANNED·WARNING_ISSUED 는 불가).",
 )
 @api_view(['DELETE'])
 def parking_delete(request, event_id):
@@ -54,8 +61,9 @@ def parking_delete(request, event_id):
         event = ParkingEvent.objects.get(id=event_id)
     except ParkingEvent.DoesNotExist:
         return Response({'error': 'event not found'}, status=status.HTTP_404_NOT_FOUND)
-    if event.status != 'DETECTED':
-        return Response({'error': f'DETECTED 상태만 삭제 가능합니다. 현재 상태: {event.status}'}, status=status.HTTP_400_BAD_REQUEST)
+    if event.status not in DELETABLE_STATUSES:
+        return Response({'error': f'{"/".join(DELETABLE_STATUSES)} 상태만 삭제 가능합니다. '
+                                  f'현재 상태: {event.status}'}, status=status.HTTP_400_BAD_REQUEST)
     event.delete()
     return Response({'status': 'deleted', 'event_id': event_id})
 
@@ -79,8 +87,34 @@ def parking_zone_update(request, event_id):
         return Response({'error': 'event not found'}, status=status.HTTP_404_NOT_FOUND)
     event.vehicle_type = serializer.validated_data['vehicle_type']
     event.zone_type    = serializer.validated_data['zone_type']
+    # 정상 주차로 판정되면 AMR1 이 스킵하므로 여기서 종결한다. 그냥 두면
+    # DETECTED 로 남아 /api/parking/next/ 가 같은 건만 계속 돌려준다.
+    if event.vehicle_type == 'NORMAL' and event.status == 'DETECTED':
+        event.status = 'CLEARED'
     event.save()
-    return Response({'event_id': event.id, 'vehicle_type': event.vehicle_type, 'zone_type': event.zone_type})
+    return Response({'event_id': event.id, 'vehicle_type': event.vehicle_type,
+                     'zone_type': event.zone_type, 'status': event.status})
+
+
+@extend_schema(
+    summary="[AMR1] 접근 불가 처리",
+    description="관측점이 지도상 장애물/미탐사 안이라 출동 자체가 불가능한 이벤트를 "
+                "status=UNREACHABLE 로 종결. DETECTED 상태에서만 동작.",
+    request=None,
+    responses={200: ParkingEventSerializer},
+)
+@api_view(['PATCH'])
+def parking_unreachable(request, event_id):
+    try:
+        event = ParkingEvent.objects.get(id=event_id)
+    except ParkingEvent.DoesNotExist:
+        return Response({'error': 'event not found'}, status=status.HTTP_404_NOT_FOUND)
+    if event.status != 'DETECTED':
+        return Response({'error': f'DETECTED 상태만 처리 가능합니다. 현재 상태: {event.status}'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    event.status = 'UNREACHABLE'
+    event.save()
+    return Response({'event_id': event.id, 'status': event.status})
 
 
 @extend_schema(
@@ -96,10 +130,11 @@ def parking_next(request):
     if not event:
         return Response({'event': None})
     return Response({
-        'event_id':      event.id,
-        'observation_x': event.observation_x,
-        'observation_y': event.observation_y,
-        'created_at':    event.created_at,
+        'event_id':        event.id,
+        'observation_x':   event.observation_x,
+        'observation_y':   event.observation_y,
+        'observation_yaw': event.observation_yaw,
+        'created_at':      event.created_at,
     })
 
 

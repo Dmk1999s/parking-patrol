@@ -28,6 +28,7 @@
 
 import base64
 import os
+import math
 import threading
 
 import cv2
@@ -186,13 +187,18 @@ class WebcamBridge(Node):
 
             # 새 좌표 등록 후 서버로 전송
             self._sent_coords.add(key)
-            payload = {'observation_x': x, 'observation_y': y}
+            # 마커 orientation(z, w) 에 실려 온 관측 방향을 도(°)로 되돌린다.
+            # 좌표만으로는 앞판을 볼지 뒤판을 볼지 복원할 수 없다.
+            yaw = math.degrees(2.0 * math.atan2(marker.pose.orientation.z,
+                                                marker.pose.orientation.w))
+            payload = {'observation_x': x, 'observation_y': y,
+                       'observation_yaw': yaw}
             threading.Thread(
                 target=_post,
                 args=(f'{SERVER}/api/parking/', payload),
                 daemon=True,
             ).start()
-            self.get_logger().info(f'좌표 전송: ({x:.2f}, {y:.2f})')
+            self.get_logger().info(f'좌표 전송: ({x:.2f}, {y:.2f}, yaw {yaw:.0f}°)')
 
 
 def main():

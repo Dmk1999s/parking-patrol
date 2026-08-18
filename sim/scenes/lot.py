@@ -183,20 +183,24 @@ def _floor_quad(stage, path, center, size, mat):
     return _quad(stage, path, pts, uvs, mat)
 
 
-def _plate_quad(stage, path, center, size, mat):
-    """-Y 를 보는 번호판 사각형. 차 로컬 좌표에서 만든다(뒤 = -Y).
+def _plate_quad(stage, path, center, size, mat, facing=-1):
+    """번호판 사각형. 차 로컬 좌표에서 만든다 (코 = +Y, 뒤 = -Y).
+
+    facing=-1 이면 뒤판(-Y 를 봄), +1 이면 앞판(+Y 를 봄).
 
     🚨 UV 를 반대로 잡으면 글자가 **거울상**으로 나온다. 오류가 안 나고 판도
        멀쩡히 보여서 렌더를 눈으로 보기 전엔 모른다 (실제로 한 번 뒤집혔다).
-       -Y 에서 +Y 를 보는 관측자에게는 월드 +X 가 **오른쪽**에 오므로,
-       이미지 오른쪽(u=1)을 +X 쪽에 붙인다.
+       -Y 에서 +Y 를 보는 관측자(뒤판을 보는 쪽)에게는 월드 +X 가 **오른쪽**에
+       오므로 이미지 오른쪽(u=1)을 +X 쪽에 붙인다. 앞판을 보는 관측자는 +Y
+       에서 -Y 를 보므로 좌우가 뒤집힌다 — x 부호를 반대로 준다.
     """
     cx, cy, cz = center
     w, h = size
-    pts = [Gf.Vec3f(cx + w / 2, cy, cz - h / 2),   # u=1, v=0
-           Gf.Vec3f(cx - w / 2, cy, cz - h / 2),   # u=0, v=0
-           Gf.Vec3f(cx - w / 2, cy, cz + h / 2),   # u=0, v=1
-           Gf.Vec3f(cx + w / 2, cy, cz + h / 2)]   # u=1, v=1
+    sx = (w / 2) * (-facing)      # 뒤판: +w/2 가 u=1 / 앞판: -w/2 가 u=1
+    pts = [Gf.Vec3f(cx + sx, cy, cz - h / 2),   # u=1, v=0
+           Gf.Vec3f(cx - sx, cy, cz - h / 2),   # u=0, v=0
+           Gf.Vec3f(cx - sx, cy, cz + h / 2),   # u=0, v=1
+           Gf.Vec3f(cx + sx, cy, cz + h / 2)]   # u=1, v=1
     uvs = [Gf.Vec2f(1, 0), Gf.Vec2f(0, 0), Gf.Vec2f(0, 1), Gf.Vec2f(1, 1)]
     return _quad(stage, path, pts, uvs, mat)
 
@@ -240,8 +244,12 @@ def _car(stage, path, center_xy, yaw, veh, mat_glass, mat_tire):
         m = _tex_mat(stage, f"{path}/Mat_Plate", tex)
         # 차체 뒷면에서 1 cm 띄운다. 딱 붙이면 Z-fighting 으로 번호판과 차체가
         # 프레임마다 번갈아 보인다.
+        # 한국은 승용차 앞·뒤 번호판이 둘 다 의무다. 앞판이 있어야 앞뒤로
+        # 낀 차가 아닌 이상 어느 한쪽에서는 판독할 수 있다 (벽쪽 세로주차).
         _plate_quad(stage, f"{path}/Plate", (0, -bl / 2 - 0.01, PLATE_Z),
-                    (plate.PLATE_W_M, plate.PLATE_H_M), m)
+                    (plate.PLATE_W_M, plate.PLATE_H_M), m, facing=-1)
+        _plate_quad(stage, f"{path}/PlateFront", (0, bl / 2 + 0.01, PLATE_Z),
+                    (plate.PLATE_W_M, plate.PLATE_H_M), m, facing=+1)
     return car
 
 

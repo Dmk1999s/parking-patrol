@@ -5,7 +5,7 @@ from .models import ParkingEvent, VehicleInfo, DisabledVehicle
 class ParkingEventCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParkingEvent
-        fields = ['observation_x', 'observation_y']
+        fields = ['observation_x', 'observation_y', 'observation_yaw']
 
 
 class ParkingEventSerializer(serializers.ModelSerializer):
@@ -17,7 +17,8 @@ class ParkingEventSerializer(serializers.ModelSerializer):
 class ParkingEventNextSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParkingEvent
-        fields = ['id', 'zone_type', 'observation_x', 'observation_y', 'status', 'created_at']
+        fields = ['id', 'zone_type', 'observation_x', 'observation_y',
+                  'observation_yaw', 'status', 'created_at']
 
 
 
@@ -38,9 +39,16 @@ class VehicleInfoCreateSerializer(serializers.Serializer):
 
 
 class VehicleInfoNextSerializer(serializers.ModelSerializer):
+    # AMR2 도 AMR1 과 같은 면(앞판/뒤판)을 봐야 번호판이 보인다. 관측 방향은
+    # 이벤트에 있으므로 조인해서 같이 내려 준다 (VehicleInfo 에 컬럼을 또
+    # 만들 필요가 없다 — amr_vehicle_x/y 가 곧 그 관측점이다).
+    observation_yaw = serializers.FloatField(source='event.observation_yaw',
+                                             read_only=True)
+
     class Meta:
         model = VehicleInfo
-        fields = ['id', 'event_id', 'plate_number', 'amr_vehicle_x', 'amr_vehicle_y']
+        fields = ['id', 'event_id', 'plate_number', 'amr_vehicle_x',
+                  'amr_vehicle_y', 'observation_yaw']
 
 
 class DisabledVehicleSerializer(serializers.ModelSerializer):

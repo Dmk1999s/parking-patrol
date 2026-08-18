@@ -23,6 +23,16 @@ DETECTED → SCANNED → WARNING_ISSUED
  (웹캠)    (AMR1)     (AMR2, 경보)
 ```
 
+AMR1 단계에서 종결되는 두 갈래도 있다. 둘 다 `DETECTED` 로 남겨 두면
+`/api/parking/next/` 가 같은 이벤트만 무한 반환한다:
+
+```
+DETECTED → CLEARED       정상 주차로 판정 → 스킵 (NORMAL PATCH 시 서버가 자동 전환)
+DETECTED → UNREACHABLE   관측점 접근 불가 → 출동 생략 (AMR1 이 명시적으로 PATCH)
+```
+
+번호판 OCR 실패는 예외로 `DETECTED` 를 **유지**한다 — 다음 순회에서 재방문한다.
+
 ## 노드별 역할
 
 | 노드 | 역할 | DB 작업 |
@@ -72,7 +82,8 @@ DETECTED → SCANNED → WARNING_ISSUED
 | `zone_type` | varchar | `NORMAL` / `COMPACT` / `DISABLED` / `FIRE` / `EV` / `Not` — AMR1이 판별 |
 | `observation_x` | float | Nav2 안전 접근 보정 x 좌표 |
 | `observation_y` | float | Nav2 안전 접근 보정 y 좌표 |
-| `status` | varchar | `DETECTED` / `SCANNED` / `WARNING_ISSUED` (인덱스, 기본값 DETECTED) |
+| `observation_yaw` | float | 관측점에서 바라볼 방향(도). 웹캠이 앞/뒤 번호판 중 어느 면을 볼지 고른 결과 — 좌표로는 복원 불가 (nullable) |
+| `status` | varchar | `DETECTED` / `SCANNED` / `WARNING_ISSUED` / `CLEARED`(정상 종결) / `UNREACHABLE`(접근 불가) (인덱스, 기본값 DETECTED) |
 | `created_at` | timestamp | 최초 웹캠 감지 시각 (자동) |
 
 ### vehicle_info
@@ -98,15 +109,16 @@ DETECTED → SCANNED → WARNING_ISSUED
 ### 웹캠 노드
 | Method | URL | 설명 |
 |--------|-----|------|
-| POST | `/api/parking/` | 차량 탐지 이벤트 생성 (status=DETECTED) |
+| POST | `/api/parking/` | 차량 탐지 이벤트 생성 (status=DETECTED). observation_yaw 선택 |
 | GET | `/api/parking/list/` | 전체 이벤트 조회 |
-| DELETE | `/api/parking/<id>/delete/` | DETECTED 이벤트 삭제 (차량 이동 시) |
+| DELETE | `/api/parking/<id>/delete/` | 이벤트 삭제 (DETECTED / CLEARED / UNREACHABLE 만) |
 
 ### AMR1 (Police 1)
 | Method | URL | 설명 |
 |--------|-----|------|
 | GET | `/api/parking/next/` | DETECTED 이벤트의 좌표를 **한 번** 수신 → AMR1이 Nav2로 자율 경로 계획 |
-| PATCH | `/api/parking/<id>/zone/` | zone_type / vehicle_type 업데이트 |
+| PATCH | `/api/parking/<id>/zone/` | zone_type / vehicle_type 업데이트 (vehicle_type=NORMAL 이면 status → CLEARED) |
+| PATCH | `/api/parking/<id>/unreachable/` | 접근 불가로 출동 생략 → status = UNREACHABLE |
 | GET | `/api/disabled/<번호판>/` | 장애인 차량 여부 확인 |
 | POST | `/api/vehicle/` | 번호판 저장 + status → SCANNED |
 
