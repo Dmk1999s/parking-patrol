@@ -40,8 +40,8 @@
    `PATCH /api/parking/<id>/zone/`. **seed 7 에서 11/11 시나리오 정답 일치**
    (일반 스킵 2, 경차 불법 2, EV 정상 1·불법 1, 소방 불법 1, 벽쪽 Not 1,
    접근 불가 2, 장애인 보류 1 — OCR 단계에서 판정). 상세는 WORKLOG.
-9. **번호판 OCR** — `sim/vision/plate_ocr.py` (3중 로컬라이저 + tesseract
-   다수결) + `amr1_nav` 통합: ILLEGAL → OCR → `POST /api/vehicle/`
+9. **번호판 OCR** — `sim/vision/plate_ocr.py` (3중 로컬라이저 + **EasyOCR
+   2단계**) + `amr1_nav` 통합: ILLEGAL → OCR → `POST /api/vehicle/`
    (plate, amr_vehicle_x/y=관측점, ocr_image_path) → **SCANNED**.
    DISABLED 는 `/api/disabled/<판>/` 조회로 최종 판정. 실패 시 DETECTED
    유지→재방문. 상세·함정은 WORKLOG.
@@ -104,6 +104,10 @@
   맞출 대상이 없다. **이 저장소 스키마가 정답이고 sqlite 로 계속 간다**
   (Django 를 `DB_HOST=` 빈값으로 기동). ⚠ 이 저장소의 마이그레이션 번호
   0013 은 팀 DB 의 0013 과 무관한 별개다 — 팀 DB 에 붙이면 안 된다.
+- **통짜 리허설을 아직 안 돌렸다 (2026-08-19 변경분)**: 번호판을 고시 규격
+  으로 다시 만들고(8자리·셀 배분·잉크 74.8 mm·청색 띠·EV 하늘색) OCR 을
+  EasyOCR 로 갈아탄 뒤의 검증이 **전부 합성 프레임**이다. 조명·그림자·노출
+  흔들림·원근이 없다. 실렌더 확인이 남았다 — `sim/OCR_PLATE_FONT.md` 참고.
 - **경차 차폭 마진이 얇다**: depth 방식으로 세단 실측 1.77~1.82 m (구방식
   2.76) 까지 좁혔지만 경차 임계 1.70 과 마진이 0.08 뿐이다. seed 7 엔
   경차구역에 진짜 경차가 없어 미검증 (남은 것 2번).
@@ -145,11 +149,38 @@ ros2 launch sim/nav2/nav2_amr2.launch.py &     # amr2 스택 (--robots both 일 
 
 # 5. AMR1 출동 + 판별 + OCR (검증은 --all, 시나리오는 무옵션 = next 1건)
 #    도착마다 구역/차종 판별→PATCH, 불법이면 OCR→vehicle POST(SCANNED).
-PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr1_nav.py --all
+#    🚨 OCR 이 easyocr 이라 **ocr_venv 인터프리터**로 돌린다 (아래 OCR 환경).
+PATROL_SERVER=http://127.0.0.1:8000 $OCRPY sim/nav2/amr1_nav.py --all
 
 # 6. AMR2 재확인 + 경보 (SCANNED 소진까지 돌고 시작 좌표로 복귀)
-PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr2_nav.py
+PATROL_SERVER=http://127.0.0.1:8000 $OCRPY sim/nav2/amr2_nav.py
 ```
+
+### OCR 환경 (`$OCRPY`)
+
+`plate_ocr` 가 EasyOCR 을 쓰는데 그건 `~/ocr_venv` 에만 있다. 같은 3.10.12 라
+ROS 패키지를 PYTHONPATH 로 얹으면 한 프로세스에서 다 돈다:
+
+```bash
+export OCRPY="env PYTHONPATH=/opt/ros/humble/lib/python3.10/site-packages:\
+/opt/ros/humble/local/lib/python3.10/dist-packages:$PYTHONPATH \
+  $HOME/ocr_venv/bin/python"
+```
+
+🚨 **핀 두 개를 같은 명령으로 걸어야 한다** — 따로 걸면 뒤엣것이 numpy 2 를
+도로 끌어온다 (둘 다 밟았다):
+
+| 패키지 | 핀 | 어기면 |
+|---|---|---|
+| `numpy` | **<2** (1.26.4) | `cv_bridge` 가 numpy 1.x 로 빌드된 C 확장이라 `AttributeError: _ARRAY_API not found` |
+| `opencv-python-headless` | **<5** (4.10.0.84) | Humble `cv_bridge` 가 타입 상수를 못 찾아 `KeyError: 16` |
+
+```bash
+~/ocr_venv/bin/pip install "numpy<2" "opencv-python-headless==4.10.0.84"
+```
+
+🚨 **`isaacsim_venv` 에는 easyocr 을 설치하지 않는다** — 거기 torch 2.11 을
+건드리면 Isaac Sim 이 깨진다. 씬은 지금처럼 따로 띄운다 (씬은 OCR 을 안 쓴다).
 
 - 이전 세션 이벤트가 DB 에 남아 있으면 `/api/parking/list/` 로 id 확인 후
   `DELETE /api/parking/<id>/delete/` 로 비우고 시작한다 (탐지 노드가 다시
@@ -209,6 +240,7 @@ PATROL_SERVER=http://127.0.0.1:8000 python3 sim/nav2/amr2_nav.py
 | 순찰/Nav2 속도 | 0.35 m/s | ≤ 0.2 m/s |
 | DiffDrive 상한 | 0.6 | 0.22 |
 | 웹캠 탐지 | 색 점유 검사 (webcam_detect.py) | YOLO 모델 |
+| 번호판 OCR | EasyOCR 2단계 (`~/ocr_venv`, GPU 21 ms / CPU 51 ms) | 그대로 가능. **원근 보정(4점 warp) 추가 필요** |
 | ~~Nav2 국지화~~ | ~~정적 TF map→odom~~ | **해소(세션 6) — AMCL 로 전환 완료** |
 | DWB 회전 | acc_lim_theta 8.0, min_speed 0.05/0.6 (데드존 회피) | 기본값 3.2, 0.0/0.0 |
 | behavior spin | 0.6~0.8 rad/s | 기본값 |

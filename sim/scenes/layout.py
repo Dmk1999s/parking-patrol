@@ -120,7 +120,11 @@ BODY_RGB = {
     "FIRE":    [(0.80, 0.08, 0.08)],
 }
 
-_HANGUL = "가나다라마바사아자차카타파하배허호"
+# 🚨 고시 별표 2-2 에 도면이 실린 글자만 쓴다. 예전 목록에는 **실제
+#    번호판에 없는** 차·카·타·파 와 사업용 바·사·아·자, 택배 배 가
+#    섞여 있었다 (`scenes/plate_glyphs.py` 의 PAGES 가 출처다).
+_HANGUL = ("가나다라마거너더러머고노도로모구누두루무"
+           "버서어저보소오조부수우주허하호")
 
 
 def is_legal(zone, kind, disabled_registered=False):
@@ -143,7 +147,13 @@ def is_legal(zone, kind, disabled_registered=False):
 
 
 def _plate(rng):
-    return (f"{rng.randint(10, 99)}{rng.choice(_HANGUL)}"
+    # 2020-07 이후 신형 등록번호판은 앞자리가 **3자리**다 (`123가4567`).
+    # 🚨 자릿수를 바꾸면 rng 소비량이 달라져 배치가 통째로 갈릴 수 있다.
+    #   실측: seed 7 에서 **차종·색·판정·빈칸이 전부 그대로**고 번호 문자열만
+    #   바뀌었다 (rejection sampling 이 한 번 어긋나 벽쪽 illegal_0 의 한글·
+    #   뒷자리까지 갈렸지만 배치에는 안 번졌다). 자릿수를 또 만지면 이 비교를
+    #   다시 할 것 — summary() 는 차체색을 안 찍으므로 plan() 을 통째로 비교한다.
+    return (f"{rng.randint(100, 999)}{rng.choice(_HANGUL)}"
             f"{rng.randint(1000, 9999)}")
 
 

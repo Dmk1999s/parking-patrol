@@ -3,7 +3,10 @@
     python3 sim/vision/plate_ocr.py --frame capture.jpg     # 오프라인 테스트
 
 관측 지점(번호판 앞 2 m, OcrCam 정면)에서 찍은 프레임을 받아 번호판을
-찾고 tesseract(kor)로 읽어 `12가3456` 형식만 통과시킨다.
+찾고 **EasyOCR** 로 읽어 `123가4567` 형식만 통과시킨다 (2020-07 신형 8자리).
+
+🚨 이 파일은 `~/ocr_venv` 인터프리터에서 돌려야 한다 (easyocr). ROS 패키지는
+   PYTHONPATH 로 얹는다 — `PROGRESS.md` 의 기동 절차를 볼 것.
 
 ## 후보를 세 가지 방법으로 찾는 이유 (전부 실측으로 필요해졌다)
 
@@ -15,12 +18,20 @@
    (그늘에서 판 V≈138 vs 차체 130 실측). 대신 어두운 글자들을 가로로
    뭉쳐 "주변이 확 밝은 글자 띠"를 찾는다.
 
-## OCR 은 변형을 여러 개 시도한다
+## 읽기는 두 단계다 — 숫자는 통짜로, 한글은 다시
 
-그늘진 판은 Otsu 이진화가 획을 뭉개 `하`→`31` 같은 오독이 났다 (실측).
-[Otsu / 적응형 / 2배 확대+Otsu] × [kor / kor+eng] 를 차례로 돌려 처음
-패턴에 맞는 결과를 쓴다. 🚨 무턱대고 확대만 하면 오히려 나빠진다
-(README — 3배 확대에서 `나` 를 놓쳤다). 변형 중 하나로만 시도한다.
+고시 도면 글리프(실제 번호판 서체)로 바꾸자 tesseract 가 43/70 으로 무너져
+EasyOCR 로 갈아탔다. 그런데 EasyOCR 도 통짜로 읽으면 **한글만** 틀린다
+(실측 70칸: 숫자 490/490 = 100%, 한글 60/70). 숫자 7자리 문맥에 눌려
+넷째 자리가 숫자로 넘어간다 — `나→4` `러→2` `오→2` `가→7`.
+
+🚨 **신뢰도로는 못 거른다.** 오답 신뢰도 최대 1.00, 정답 최소 0.45 다.
+
+번호 형식이 `DDD H DDDD` 로 고정이고 고시의 셀 배분(`plate.CELL_MM`)을
+갖고 있으므로, 읽어 온 **텍스트 상자를 셀 비율로 갈라** 한글 칸만 한글
+전용 allowlist 로 다시 읽는다. 이걸 붙이면 70/70 이다.
+
+판 사각형을 정밀하게 잡을 필요는 없다 — 상자는 EasyOCR 이 준다.
 
 도착 yaw 오차(±14°)만큼 판이 중앙에서 벗어나므로 ROI 를 넓게 잡고,
 실패하면 호출부(amr1_nav)가 다음 프레임으로 재시도한다.
@@ -29,17 +40,20 @@
 import argparse
 import os
 import re
-import subprocess
-import tempfile
+import sys
 
 import cv2
 import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scenes"))
+import plate  # noqa: E402   (셀 배분 — 고시 별표 2-2)
+import plate_glyphs  # noqa: E402   (번호판에 실재하는 45자)
 
 # 도착 오차(yaw ±14° ≈ 230 px, 위치 ±0.25 m ≈ 116 px)에 판 반폭 150 px 를
 # 더하면 판이 중앙에서 ~500 px 까지 벗어난다 — 반폭 420 이던 ROI 에서
 # 잘려 로컬라이즈가 실패했다 (실측). 거의 전폭으로 잡는다.
 ROI = (160, 580, 60, 1220)           # v0, v1, u0, u1
-PLATE_RE = re.compile(r"(\d{2})\s*([가-힣])\s*(\d{4})")
+PLATE_RE = re.compile(r"(\d{3})\s*([가-힣])\s*(\d{4})")
 
 
 def _candidates(img):
@@ -127,51 +141,56 @@ def _candidates(img):
     return out[:5]
 
 
-def _tesseract(gray_img, lang):
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-        tmp = f.name
-    try:
-        cv2.imwrite(tmp, gray_img)
-        return subprocess.run(
-            ["tesseract", tmp, "stdout", "-l", lang, "--psm", "7"],
-            capture_output=True, text=True, timeout=20).stdout
-    finally:
-        os.unlink(tmp)
+DIGITS = "0123456789"
+HANGUL = plate_glyphs.CHARS[10:]                 # 별표에 도면이 있는 35자
+
+# 한글 칸(넷째)이 문자 영역에서 차지하는 좌·우 비율. 셀 배분이 출처다.
+_C = plate.CELL_MM
+HAN_L = sum(_C[:3]) / sum(_C)
+HAN_R = sum(_C[:4]) / sum(_C)
+
+_READER = None
+
+
+def _reader():
+    """EasyOCR 은 모델 적재가 2초쯤 걸린다 — 프로세스당 한 번만 만든다."""
+    global _READER
+    if _READER is None:
+        import easyocr
+        import torch
+        _READER = easyocr.Reader(["ko", "en"], gpu=torch.cuda.is_available(),
+                                 verbose=False)
+    return _READER
 
 
 def read_plate(crop_bgr):
-    """크롭 하나를 여러 변형으로 읽어 `12가3456` 을 돌려준다. 실패 시 None."""
-    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    """크롭 하나를 읽어 `123가4567` 을 돌려준다. 실패 시 None."""
+    r = _reader()
+    res = r.readtext(crop_bgr, allowlist=DIGITS + HANGUL)
+    if not res:
+        return None
+    box, text, _ = max(res, key=lambda z: len(z[1]))
+    text = text.replace(" ", "")
+    if len(text) != 8:
+        return None
 
-    def otsu(g):
-        _, b = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        return 255 - b if b.mean() < 127 else b
+    # 한글 칸만 잘라 다시 읽는다. 칸이 85 mm 인데 글자는 47 mm 라 여유가
+    # 커서, 상자 추정이 몇 % 어긋나도 글자가 잘리지 않는다.
+    x0 = min(p[0] for p in box); x1 = max(p[0] for p in box)
+    y0 = max(0, int(min(p[1] for p in box))); y1 = int(max(p[1] for p in box))
+    w = x1 - x0
+    a = int(max(0, x0 + w * HAN_L - w * 0.02))
+    b = int(min(crop_bgr.shape[1], x0 + w * HAN_R + w * 0.02))
+    cell = crop_bgr[y0:y1, a:b]
+    if cell.size:
+        up = cv2.resize(cell, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+        han = "".join(t for _, t, _ in r.readtext(up, allowlist=HANGUL))
+        han = han.replace(" ", "")
+        if len(han) == 1:
+            text = text[:3] + han + text[4:]
 
-    def adaptive(g):
-        b = cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                  cv2.THRESH_BINARY, 31, 10)
-        return 255 - b if b.mean() < 127 else b
-
-    up = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    variants = [otsu(gray), adaptive(gray), otsu(up)]
-    # 변형별 결과가 갈릴 수 있어 (끝자리 2↔7 오독 실측) 다수결로 정한다.
-    # 🚨 표는 **이진화 변형당 1표** — 같은 변형에 언어만 바꾸면 같은
-    #    오독이 2표가 되어 조기 확정되는 함정이 있었다 (실측). 언어는
-    #    kor+eng 우선, 한글을 못 읽으면 kor 로 보충만 한다.
-    votes = {}
-    for v in variants:
-        text = None
-        for lang in ("kor+eng", "kor"):
-            m = PLATE_RE.search(_tesseract(v, lang).replace(" ", ""))
-            if m:
-                text = "".join(m.groups())
-                break
-        if text is None:
-            continue
-        votes[text] = votes.get(text, 0) + 1
-        if votes[text] >= 2:
-            return text
-    return max(votes, key=votes.get) if votes else None
+    m = PLATE_RE.search(text)
+    return "".join(m.groups()) if m else None
 
 
 def ocr_frame(frame_bgr):

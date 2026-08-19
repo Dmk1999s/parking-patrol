@@ -77,13 +77,35 @@ WHITE_S_MAX = 55
 LINE_MIN_PX = 800                    # 바닥 띠에서 이 이상 잡혀야 "선이 있다"
 
 RED_S_MIN, RED_PX_MIN = 110, 30000   # 소방차(빨간 대형 차체)
-PLATE_BLUE = (95, 130, 100, 60)      # EV 파란 번호판
-# 🚨 도착 자세에 따라 파란 판 픽셀 수가 8386→2501 까지 흔들린다 (실측).
-#    2500 으로 뒀다가 정상 전기차가 기준 미달로 불법 처리된 회귀가 있었다.
-#    SEDAN 흰 판은 0~151 px 라 600 이면 양쪽 다 4배 이상 여유다.
-PLATE_PX_MIN = 600
+# 🚨 채도 문턱 100 → **24**. [별표 18] 의 EV 바탕이 PANTONE 290C(연한 하늘색)
+#    이라 텍스처에서 S≈54 인데, **렌더에서는 조명이 밝아 S≈32 까지 떨어진다**
+#    (V=218). 100 은 물론이고 35 도 EV 판보다 높아서, 판이 통째로 안 잡히고
+#    채도 높은 가장자리만 얇게 걸렸다 — 그게 차체 잡음과 구별이 안 됐다.
+#    통짜 리허설 실측(같은 프레임):
+#
+#        EV 판 바탕  S=32   |  흰 판 바탕 S=1  |  차체 S=7~16
+#
+#    24 는 EV(1.33배 아래)와 차체(1.5배 위) 사이다. 문턱을 **내려야** 갈린다는
+#    게 요점이다 — 올리면 진짜 EV 판을 놓친다.
+PLATE_BLUE = (95, 130, 24, 60)       # EV 하늘색 번호판
+# 🚨 판별은 파란 **화소 수**가 아니라 파란 **폭**으로 한다. 신형(2020-07~)
+#    번호판은 왼쪽에 태극+KOR 청색 띠가 **모든 차에** 붙어 있어서, 화소로
+#    세면 2 m 에서 띠만으로 ~1,000 px 이 나온다 — 옛 임계 600 을 넘겨
+#    전 차량이 EV(=정상)로 판정되고 단속이 0건이 된다. 면적은 띠와 판을
+#    못 가르지만 폭은 가른다:
+#        거리 1~3 m 에서  판 폭 483~161 px  vs  청색 띠 51~17 px
+#    (도착 자세에 따라 화소 수가 8386→2501 까지 흔들리던 문제도 같이 빠진다
+#     — 폭은 판이 통째로 보이는 한 거의 안 흔들린다.)
+BLUE_RUN_MIN = 100                   # 연속 파란 열이 이만큼이면 파란 판이다
 PLATE_Z, PLATE_H_M = 0.42, 0.110     # 판 중심 높이·판 높이 (lot.py·plate.py 와 짝)
 PLATE_D_MIN, PLATE_D_MAX = 1.0, 3.0  # 관측점→판 거리 (설계 1.3~2.0 + 도착 오차)
+# 🚨 열당 두께를 **기하로** 정한다. 3 으로 두면 흰 판 가장자리의 반사 잡음
+#    (열당 4행)이 통과해 차체까지 이어붙고, EV 세단이 EV 로 오판됐다 (통짜
+#    리허설 실측: 세단 273 px vs 진짜 EV 243 px — 오탐이 더 컸다).
+#    가장 먼 거리(PLATE_D_MAX)에서의 판 높이의 30% 를 요구한다:
+#        0.110 m × 928 px/m ÷ 3.0 m ≈ 34 px  →  30% ≈ 10
+#    실측으로 8~20 이 전부 통과했고 10 이 그 한가운데다.
+BLUE_COL_MIN = round(0.30 * PLATE_H_M * F_PX / PLATE_D_MAX)   # = 10
 COMPACT_MAX_W = 1.70                 # 차폭 이하면 경차 (1.55 vs 1.80)
 DARK_V_MAX = 55                      # 차폭 측정용 어두운 픽셀 (바퀴·하부 그림자)
 DARK_COL_MIN = 4                     # 열에 이만큼 쌓여야 차 실루엣
@@ -98,6 +120,21 @@ def row_at(h, d):
 def ground_row(d):
     """거리 d(m)의 바닥이 놓이는 이미지 행."""
     return row_at(0.0, d)
+
+
+def _dump(frame_bgr, wx, wy, yaw_deg):
+    """`PATROL_ZONE_DEBUG` 가 가리키는 디렉터리에 판정 시점 프레임을 남긴다.
+
+    판정 숫자(예: `plate_blue_run`)만으로는 **무엇이** 파랗게 잡혔는지 못 
+    가른다 — 차체인지, 배경인지, 진짜 판인지. 원본 프레임이 있어야 재현된다.
+    평소에는 환경변수가 없어 아무 일도 하지 않는다.
+    """
+    d = os.environ.get("PATROL_ZONE_DEBUG")
+    if not d:
+        return
+    os.makedirs(d, exist_ok=True)
+    cv2.imwrite(os.path.join(d, f"zone_{wx:.2f}_{wy:.2f}_{yaw_deg:.0f}.png"),
+                frame_bgr)
 
 
 def stall_ahead(wx, wy, yaw_deg):
@@ -144,7 +181,7 @@ def is_fire_truck(hsv):
 
 
 def has_blue_plate(hsv):
-    """번호판이 놓일 수 있는 행 띠의 파란 번호판 — 전기차 규격.
+    """파란 번호판의 **폭** — 연속으로 파란 열의 최대 길이(px). 전기차 규격.
 
     🚨 예전엔 rows 260:500 고정이라 아래 180 행이 4~6 m 앞 **바닥**이었다
     (ground_row: 4 m→504, 6 m→488). 먼 바닥의 파란 주차선·장애인 표지가
@@ -152,12 +189,20 @@ def has_blue_plate(hsv):
     같은 차가 다른 자세에선 0 px — 임계값으로는 못 막는 비결정 결함).
     판 높이로 띠를 좁히면 바닥은 아무리 멀어도 지평선(row 457) 아래라
     **원천 배제**된다 — 지금 띠는 206:406.
+
+    🚨 반환값이 화소 수에서 **폭**으로 바뀌었다 (신형 번호판 청색 띠 —
+    위 BLUE_RUN_MIN 주석). WORKLOG 세션 5 이전의 `plate_blue_px 8703`
+    같은 값과는 **직접 비교되지 않는다**.
     """
     h0, h1, smin, vmin = PLATE_BLUE
     r0 = row_at(PLATE_Z + PLATE_H_M / 2, PLATE_D_MIN)
     r1 = row_at(PLATE_Z - PLATE_H_M / 2, PLATE_D_MAX)
-    box = hsv[r0:r1, 400:880]
-    return int(_mask(box, h0, h1, smin, vmin).sum())
+    m = _mask(hsv[r0:r1, 400:880], h0, h1, smin, vmin)
+    best = run = 0
+    for is_blue in m.sum(axis=0) >= BLUE_COL_MIN:
+        run = run + 1 if is_blue else 0
+        best = max(best, run)
+    return int(best)
 
 
 def car_width_m(hsv, dist=2.0):
@@ -218,6 +263,7 @@ def classify(frame_bgr, wx, wy, yaw_deg, depth=None):
              measurements=진단용 실측값)
     """
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    _dump(frame_bgr, wx, wy, yaw_deg)
     st = stall_ahead(wx, wy, yaw_deg)
     colors = line_colors(hsv)
     meas = dict(line_px=colors)
@@ -250,8 +296,8 @@ def classify(frame_bgr, wx, wy, yaw_deg, depth=None):
         vehicle = ("NORMAL" if w is not None and w <= COMPACT_MAX_W
                    else "ILLEGAL")
     elif zone == "EV":
-        meas["plate_blue_px"] = has_blue_plate(hsv)
-        vehicle = "NORMAL" if meas["plate_blue_px"] >= PLATE_PX_MIN else "ILLEGAL"
+        meas["plate_blue_run"] = has_blue_plate(hsv)
+        vehicle = "NORMAL" if meas["plate_blue_run"] >= BLUE_RUN_MIN else "ILLEGAL"
     else:                                        # DISABLED — DB 조회 필요
         vehicle = None
     return dict(zone_type=zone, vehicle_type=vehicle,
