@@ -732,7 +732,10 @@ async function loadEvents(statusFilter) {
     const data = await res.json();
     const tbody = document.getElementById('events-tbody');
     tbody.innerHTML = data.map(v => {
-      const imgPath = v.vehicle_info?.ocr_image_path;
+      // 저장 형태가 두 가지다 — 업로드는 '/media/...', AMR1 은 저장소 상대
+      // 경로 'media/...' 를 보낸다. 뒤엣것은 /monitor/ 기준으로 풀려 404 가 난다.
+      const rawPath = v.vehicle_info?.ocr_image_path;
+      const imgPath = rawPath && !rawPath.startsWith('/') ? '/' + rawPath : rawPath;
       const imgCell = imgPath
         ? `<a href="${imgPath}" target="_blank"><img src="${imgPath}" style="height:48px;border-radius:4px;cursor:pointer;"></a>`
         : '-';
