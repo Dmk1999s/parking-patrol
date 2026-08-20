@@ -8,6 +8,11 @@
 > 끝났다. 이 저장소는 그 시스템을 **혼자 Isaac Sim + TurtleBot3 로 다시 구현한
 > 개인 작업**이다. 서버 API 는 팀 시절 규격을 그대로 유지하고, DB 는 sqlite 로 돈다.
 
+![관제 대시보드](docs/images/dashboard_home.png)
+
+> 관제 대시보드. 왼쪽 위가 주차장 오버헤드 웹캠, 아래 둘이 순찰 로봇 두 대의 카메라다.
+> 화면의 수치와 이벤트는 아래 **통짜 리허설 5** 를 그대로 돌린 결과다.
+
 시연 녹화: [`rehearsal5_20260819.mp4`](rehearsal5_20260819.mp4) — 탐지부터 경보까지 한 번에 완주한 리허설.
 
 ---
@@ -22,6 +27,11 @@
 [AMR2 / Police 2]    Nav2 자율 출동 → 번호판 재판독 → DB 대조 → 경보
                                                      status = WARNING_ISSUED
 ```
+
+| 웹캠이 보는 화면 | AMR1 이 보는 화면 |
+|---|---|
+| ![웹캠 시점](docs/images/scene_webcam.png) | ![AMR1 OcrCam](docs/images/scene_ocrcam.png) |
+| 오버헤드 카메라. 구역 선 색이 곧 구역 종류다 — 흰색 일반 · 파랑 경차/장애인 · 초록 EV · 주황 소방 | 번호판 촬영용 `OcrCam`. 2 m 앞에 서서 찍은 뒤 EasyOCR 로 읽는다 |
 
 AMR1 단계에서 끝나는 갈래가 둘 있다. 그대로 `DETECTED` 로 두면
 `/api/parking/next/` 가 같은 건만 무한 반환하므로 별도 상태로 종결한다.
@@ -39,6 +49,11 @@ AMR1 단계에서 끝나는 갈래가 둘 있다. 그대로 `DETECTED` 로 두�
 ---
 
 ## 구성
+
+![시뮬레이션 씬](docs/images/scene_overview.png)
+
+주차장 씬은 USD 파일이 아니라 **코드로 생성한다** (`sim/scenes/lot.py`). 주차면 · 차량 ·
+번호판 · 담장까지 전부 실측 규격이다.
 
 ```
 app/            Django 앱 — 모델 · API · 모니터 대시보드
@@ -103,6 +118,15 @@ Isaac Sim 설치는 `./sim/setup/install.sh`.
 | 번호판 OCR | **7/7** 전부 1회 성공 (EasyOCR 2단계, 장당 35 ms) |
 | AMR2 검증 | **7/7** 매치 → `WARNING_ISSUED` → 복귀 완료 |
 | 국지화 | AMCL (정적 TF 우회 제거, 보정량 0.24~0.27 m) |
+
+![이벤트 로그](docs/images/dashboard_events.png)
+
+이벤트 로그. `OCR 이미지` 열이 AMR1 이 실제로 잘라 낸 번호판이다 — #11 은 EV 판이라
+[별표 18] 대로 연한 하늘색이다.
+
+![번호판 비교 결과](docs/images/dashboard_plate.png)
+
+AMR2 가 현장에서 다시 읽은 번호판과 DB 값을 대조한 결과. 7건 전부 일치해 경보로 넘어갔다.
 
 번호판은 국토부 고시 별표 원문의 셀 배분·잉크 높이·글리프를 그대로 재현했다.
 실제 서체가 들어가자 tesseract 가 43/70 으로 무너져 EasyOCR 2단계로 교체했고
